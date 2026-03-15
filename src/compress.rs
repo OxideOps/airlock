@@ -62,10 +62,9 @@ pub struct CompressResult {
 /// use serde_json::json;
 /// use airlock::compress::compress;
 ///
-/// let entries = vec![
-///     json!({"user": "User_A", "action": "login"}),
-///     json!({"user": "User_B", "action": "logout"}),
-/// ];
+/// let entries: Vec<serde_json::Value> = (0..10)
+///     .map(|i| json!({"user": format!("User_{i}"), "action": "login"}))
+///     .collect();
 /// let result = compress(&entries).unwrap();
 /// assert!(result.reduction_pct > 0.0);
 /// assert!(result.schema.contains(&"user".to_string()));

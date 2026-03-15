@@ -175,8 +175,7 @@ fn main() {
     init_tracing(cli.verbose);
 
     if let Err(e) = run(cli) {
-        eprintln!("{RED_BOLD}Error:{RESET} {e}");
-        process::exit(1);
+        fatal(&e.to_string());
     }
 }
 
