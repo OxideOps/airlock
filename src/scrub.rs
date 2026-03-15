@@ -160,8 +160,8 @@ impl AliasEngine {
 /// gives ~456 976 unique values, making accidental collision extremely unlikely
 /// for typical enterprise datasets.
 fn seeded_alias(salt: &str, entity: &EntityType, token: &str) -> String {
-    use rand::Rng as _;
-    use rand::SeedableRng as _;
+    use rand::Rng;
+    use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
     use sha2::{Digest, Sha256};
 
