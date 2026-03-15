@@ -1,0 +1,54 @@
+[package]
+name = "airlock"
+version = "0.1.0"
+edition = "2021"
+description = "Local-first AI security gateway: PII redaction, token compression, and audit ledger"
+repository = "https://github.com/dillonroller/airlock"
+license = "MIT"
+keywords = ["security", "pii", "ai", "privacy", "cli"]
+categories = ["command-line-utilities", "cryptography"]
+authors = ["Dillon Roller"]
+
+[[bin]]
+name = "airlock"
+path = "src/main.rs"
+
+[dependencies]
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# JSON serialization/deserialization with zero-copy support
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Regex engine (zero-copy matching over byte slices)
+regex = "1"
+
+rand = "0.8"
+rand_chacha = "0.3"
+
+# SHA-256 for deterministic seed derivation from PII tokens
+sha2 = "0.10"
+
+# Parallel processing
+rayon = "1"
+
+# Local SQLite Risk Ledger
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Timestamps
+chrono = "0.4"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

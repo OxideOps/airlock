@@ -1,0 +1,12 @@
+[
+  {"timestamp":"2026-03-14T10:00:01Z","user":"Dillon Roller","email":"dillon@corp.example.com","action":"login","ip":"10.0.0.1","status":"success","session_id":"sess-0001"},
+  {"timestamp":"2026-03-14T10:00:45Z","user":"Alice Johnson","email":"alice.johnson@corp.example.com","action":"read_file","ip":"10.0.0.2","status":"success","session_id":"sess-0002"},
+  {"timestamp":"2026-03-14T10:01:12Z","user":"Bob Smith","email":"bob.smith@corp.example.com","action":"write_file","ip":"10.0.0.3","status":"denied","session_id":"sess-0003"},
+  {"timestamp":"2026-03-14T10:02:00Z","user":"Dillon Roller","email":"dillon@corp.example.com","action":"logout","ip":"10.0.0.1","status":"success","session_id":"sess-0004"},
+  {"timestamp":"2026-03-14T10:03:30Z","user":"Alice Johnson","email":"alice.johnson@corp.example.com","action":"delete_file","ip":"10.0.0.2","status":"denied","session_id":"sess-0005"},
+  {"timestamp":"2026-03-14T10:04:10Z","user":"Carol White","email":"carol.white@corp.example.com","action":"login","ip":"10.0.0.4","status":"success","session_id":"sess-0006"},
+  {"timestamp":"2026-03-14T10:05:00Z","user":"Bob Smith","email":"bob.smith@corp.example.com","action":"read_file","ip":"10.0.0.3","status":"success","session_id":"sess-0007"},
+  {"timestamp":"2026-03-14T10:06:22Z","user":"Carol White","email":"carol.white@corp.example.com","action":"write_file","ip":"10.0.0.4","status":"success","session_id":"sess-0008"},
+  {"timestamp":"2026-03-14T10:07:45Z","user":"Dillon Roller","email":"dillon@corp.example.com","action":"admin_access","ip":"10.0.0.1","status":"success","session_id":"sess-0009"},
+  {"timestamp":"2026-03-14T10:09:00Z","user":"Alice Johnson","email":"alice.johnson@corp.example.com","action":"export_data","ip":"10.0.0.2","status":"denied","session_id":"sess-0010"}
+]
