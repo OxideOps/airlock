@@ -1,8 +1,6 @@
 # Airlock
 
 [![CI](https://github.com/OxideOps/airlock/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/OxideOps/airlock/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/airlock.svg)](https://crates.io/crates/airlock)
-[![PyPI](https://img.shields.io/pypi/v/airlock.svg)](https://pypi.org/project/airlock/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 
