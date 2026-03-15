@@ -136,17 +136,18 @@ fn scrub(json_input: &str, salt: Option<&str>, db_path: Option<&str>) -> PyResul
     })
 }
 
-/// Compress a JSON array of log objects without PII redaction.
+/// Compress a JSON array or NDJSON log objects without PII redaction.
 ///
 /// Args:
-///     json_input: A JSON string (use `json.dumps(records)` to convert a list).
+///     json_input: A JSON string (use `json.dumps(records)` to convert a list)
+///                 or an NDJSON string (one JSON object per line).
 ///
 /// Returns:
 ///     CompressOutput with `.json_str`, `.tokens_before`, `.tokens_after`,
 ///     `.reduction_pct`, and `.entry_count`.
 #[pyfunction]
 fn compress(json_input: &str) -> PyResult<CompressOutput> {
-    let entries: Vec<serde_json::Value> = serde_json::from_str(json_input)
+    let entries = scrub_mod::parse_entries(json_input)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
     let result = compress::compress(&entries)
@@ -168,6 +169,7 @@ fn compress(json_input: &str) -> PyResult<CompressOutput> {
 
 #[pymodule]
 fn airlock(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(scrub, m)?)?;
     m.add_function(wrap_pyfunction!(compress, m)?)?;
     m.add_class::<ScrubOutput>()?;

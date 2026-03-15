@@ -233,10 +233,28 @@ pub struct ScrubResult {
 
 // ── Pipeline ──────────────────────────────────────────────────────────────────
 
+/// Parse a raw string as either a JSON array or NDJSON (one object per line).
+///
+/// This is the single source of truth for input parsing used by the CLI,
+/// the Python SDK, and the scrub pipeline itself.
+pub fn parse_entries(raw: &str) -> Result<Vec<Value>> {
+    let trimmed = raw.trim_start();
+    if trimmed.starts_with('[') {
+        serde_json::from_str(trimmed).map_err(|e| anyhow::anyhow!("Invalid JSON array: {e}"))
+    } else {
+        trimmed
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).map_err(|e| anyhow::anyhow!("Invalid NDJSON: {e}")))
+            .collect()
+    }
+}
+
 /// Run the complete Airlock scrub pipeline on `raw_json`.
+///
+/// Accepts both JSON arrays (`[{...}, ...]`) and NDJSON (one object per line).
 pub fn scrub(raw_json: &str, config: ScrubConfig) -> Result<ScrubResult> {
-    let entries: Vec<Value> =
-        serde_json::from_str(raw_json).map_err(|e| anyhow::anyhow!("Invalid JSON: {e}"))?;
+    let entries = parse_entries(raw_json)?;
 
     info!("Scrubbing {} log entries", entries.len());
 
@@ -416,6 +434,27 @@ mod tests {
         assert_eq!(compute_risk(0, 10), 0.0);
         assert_eq!(compute_risk(4, 1), 100.0);
         assert!(compute_risk(2, 10) < 100.0);
+    }
+
+    #[test]
+    fn parse_entries_handles_json_array() {
+        let raw = r#"[{"a": 1}, {"a": 2}]"#;
+        let entries = parse_entries(raw).unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn parse_entries_handles_ndjson() {
+        let raw = "{\"a\": 1}\n{\"a\": 2}\n";
+        let entries = parse_entries(raw).unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn parse_entries_ndjson_ignores_blank_lines() {
+        let raw = "{\"a\": 1}\n\n{\"a\": 2}\n";
+        let entries = parse_entries(raw).unwrap();
+        assert_eq!(entries.len(), 2);
     }
 
     #[test]

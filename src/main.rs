@@ -35,24 +35,6 @@ fn require_file(path: &Path) -> Result<String> {
     }
 }
 
-/// Parse either a JSON array (`[{...}, ...]`) or NDJSON (one object per line).
-fn parse_json_input(raw: &str, path: &Path) -> Result<Vec<serde_json::Value>> {
-    let trimmed = raw.trim_start();
-    if trimmed.starts_with('[') {
-        serde_json::from_str(trimmed)
-            .with_context(|| format!("'{}' is not a valid JSON array", path.display()))
-    } else {
-        trimmed
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| {
-                serde_json::from_str(l)
-                    .with_context(|| format!("'{}': invalid NDJSON line: {l:?}", path.display()))
-            })
-            .collect()
-    }
-}
-
 /// Build a [`RegexNer`] from the active config's custom rules.
 fn build_ner(cfg: &AirlockConfig) -> Result<RegexNer> {
     let mut custom_rules = Vec::new();
@@ -273,7 +255,8 @@ fn cmd_compress(path: &Path, output: &str, cfg: AirlockConfig) -> Result<()> {
     let raw = require_file(path)?;
     debug!("Loaded {} bytes from '{}'", raw.len(), path.display());
 
-    let entries = parse_json_input(&raw, path)?;
+    let entries = scrub::parse_entries(&raw)
+        .with_context(|| format!("Failed to parse '{}'", path.display()))?;
     let result = compress::compress(&entries)?;
 
     eprintln!();
