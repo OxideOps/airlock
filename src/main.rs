@@ -5,31 +5,41 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing::debug;
 
-mod compress;
-mod ledger;
-mod ner;
-mod scrub;
-mod types;
+use airlock::{compress, error, ledger, scrub};
+use airlock::error::AirlockError;
+use airlock::scrub::AliasMode;
 
 // ── ANSI helpers ──────────────────────────────────────────────────────────────
 
 const RED_BOLD: &str = "\x1b[1;31m";
 const RESET: &str = "\x1b[0m";
 
-fn err(msg: &str) -> ! {
+fn fatal(msg: &str) -> ! {
     eprintln!("{RED_BOLD}Error:{RESET} {msg}");
     process::exit(1);
 }
 
+/// Read a file to a `String`, emitting user-friendly errors for common failures.
 fn require_file(path: &Path) -> Result<String> {
-    if !path.exists() {
-        err(&format!("File not found at '{}'", path.display()));
+    match std::fs::read_to_string(path) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(AirlockError::FileNotFound {
+                path: path.display().to_string(),
+            }
+            .into())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            Err(AirlockError::PermissionDenied {
+                path: path.display().to_string(),
+            }
+            .into())
+        }
+        Err(e) => Err(e.into()),
     }
-    std::fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("Could not read '{}': {e}", path.display()))
 }
 
-// ── Top-level CLI ─────────────────────────────────────────────────────────────
+// ── CLI ───────────────────────────────────────────────────────────────────────
 
 /// Airlock — Local-first AI Security Gateway
 ///
@@ -66,7 +76,7 @@ fn require_file(path: &Path) -> Result<String> {
     arg_required_else_help = true
 )]
 struct Cli {
-    /// Verbosity: -v info, -vv debug, -vvv trace
+    /// Verbosity level: -v info, -vv debug, -vvv trace
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
 
@@ -83,18 +93,17 @@ enum Commands {
     /// The same identity always maps to the same alias within the run, so AI models
     /// can still reason about behaviour patterns without seeing real data.
     ///
-    /// Token-Tax compression then strips repeated key names into a single schema
-    /// header, reducing the token footprint by 20–60%.  Processing stats are
-    /// persisted to the local SQLite Risk Ledger for audit purposes.
+    /// Passing --salt enables cross-run stability: the same real identity will map
+    /// to the same alias every time, across any number of files, as long as the
+    /// same salt is supplied.
     ///
     /// OUTPUT
     ///   Compressed JSON → stdout  (pipeable to a file or another process)
     ///   Report + swaps  → stderr
     ///
     /// EXAMPLES
-    ///   airlock scrub logs.json
     ///   airlock scrub logs.json --diff
-    ///   airlock scrub logs.json --diff > clean.json
+    ///   airlock scrub logs.json --salt mysecret --diff > clean.json
     Scrub {
         /// Path to a JSON file containing an array of log objects
         path: PathBuf,
@@ -110,6 +119,14 @@ enum Commands {
         /// Output format for the compressed JSON: pretty or compact
         #[arg(short, long, default_value = "pretty", value_name = "FORMAT")]
         output: String,
+
+        /// Enable stable cross-run aliases by seeding alias derivation with SALT.
+        ///
+        /// When set, the same real identity always maps to the same synthetic alias
+        /// regardless of file order or which records are present.  Keep this value
+        /// secret — it is the only thing preventing alias reversal.
+        #[arg(long, value_name = "SALT")]
+        salt: Option<String>,
     },
 
     /// Compress a JSON log file without PII redaction.
@@ -117,8 +134,6 @@ enum Commands {
     /// Extracts all repeated top-level JSON keys into a single '__airlock_schema'
     /// header and converts each log object into a compact value array.  No PII
     /// detection is performed — use 'scrub' if you need redaction too.
-    ///
-    /// Useful for benchmarking token savings before deploying the full pipeline.
     ///
     /// EXAMPLES
     ///   airlock compress logs.json
@@ -172,7 +187,8 @@ fn run(cli: Cli) -> Result<()> {
             db,
             diff,
             output,
-        } => cmd_scrub(&path, &db, diff, &output),
+            salt,
+        } => cmd_scrub(&path, &db, diff, &output, salt),
         Commands::Compress { path, output } => cmd_compress(&path, &output),
         Commands::Ledger { db, last } => cmd_ledger(&db, last),
     }
@@ -180,21 +196,33 @@ fn run(cli: Cli) -> Result<()> {
 
 // ── Command handlers ──────────────────────────────────────────────────────────
 
-fn cmd_scrub(path: &Path, db: &Path, diff: bool, output: &str) -> Result<()> {
+fn cmd_scrub(
+    path: &Path,
+    db: &Path,
+    diff: bool,
+    output: &str,
+    salt: Option<String>,
+) -> Result<()> {
     let raw = require_file(path)?;
     debug!("Loaded {} bytes from '{}'", raw.len(), path.display());
+
+    let alias_mode = match salt {
+        Some(s) => {
+            eprintln!("  ℹ  Stable-seed mode enabled — aliases are cross-run deterministic.");
+            AliasMode::Seeded { salt: s }
+        }
+        None => AliasMode::Sequential,
+    };
 
     let config = scrub::ScrubConfig {
         db_path: db,
         source_path: path.display().to_string(),
+        alias_mode,
     };
+
     let result = scrub::scrub(&raw, config)?;
 
-    print_scrub_report(
-        &result,
-        &path.display().to_string(),
-        &db.display().to_string(),
-    );
+    print_scrub_report(&result, &path.display().to_string(), &db.display().to_string());
 
     if diff && !result.all_records.is_empty() {
         eprintln!("  Swap Detail:");
@@ -219,10 +247,13 @@ fn cmd_compress(path: &Path, output: &str) -> Result<()> {
     let raw = require_file(path)?;
     debug!("Loaded {} bytes from '{}'", raw.len(), path.display());
 
-    let entries: Vec<serde_json::Value> = serde_json::from_str(&raw)
-        .map_err(|e| anyhow::anyhow!("'{}' is not a valid JSON array: {e}", path.display()))?;
+    let entries: Vec<serde_json::Value> = serde_json::from_str(&raw).map_err(|e| {
+        AirlockError::InvalidJson {
+            detail: format!("'{}' is not a valid JSON array: {e}", path.display()),
+        }
+    })?;
 
-    let result = compress::compress(&entries);
+    let result = compress::compress(&entries)?;
 
     eprintln!();
     eprintln!("  ╔══════════════════════════════════════════════════════════╗");
@@ -266,8 +297,10 @@ fn cmd_ledger(db: &Path, last: usize) -> Result<()> {
         );
         return Ok(());
     }
+
     let ledger = ledger::Ledger::open(db)?;
     let rows = ledger.recent(last)?;
+
     if rows.is_empty() {
         eprintln!("Ledger is empty — run 'airlock scrub <file>' first.");
         return Ok(());
@@ -361,6 +394,7 @@ fn print_scrub_report(result: &scrub::ScrubResult, source: &str, db_path: &str) 
 
 // ── Display helpers ───────────────────────────────────────────────────────────
 
+/// Render a filled/empty progress bar of `width` cells.
 fn bar(pct: f64, width: usize) -> String {
     let filled = ((pct / 100.0) * width as f64).round() as usize;
     format!(
@@ -370,6 +404,7 @@ fn bar(pct: f64, width: usize) -> String {
     )
 }
 
+/// Return the last alias label for `n` unique aliases (e.g. `n=3` → `"C"`).
 fn nth_label(n: usize) -> String {
     if n == 0 {
         return "—".to_string();
@@ -377,6 +412,7 @@ fn nth_label(n: usize) -> String {
     label_for(n.saturating_sub(1))
 }
 
+/// Excel-style label for zero-based index `n`.
 fn label_for(mut n: usize) -> String {
     let mut s = String::new();
     loop {
@@ -389,6 +425,7 @@ fn label_for(mut n: usize) -> String {
     s
 }
 
+/// Truncate `s` to at most `max` characters, prepending `…` if truncated.
 fn trunc(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_owned()
@@ -397,13 +434,15 @@ fn trunc(s: &str, max: usize) -> String {
     }
 }
 
+/// Risk score for display (mirrors the library calculation).
 fn compute_risk_display(pii: usize, entries: usize) -> f64 {
     if entries == 0 {
         return 0.0;
     }
-    ((pii as f64 / entries as f64) * 25.0).min(100.0)
+    (pii as f64 / entries as f64 * 25.0).min(100.0)
 }
 
+/// Initialise the `tracing` subscriber based on the `-v` verbosity flag.
 fn init_tracing(verbose: u8) {
     let level = match verbose {
         0 => "warn",
@@ -418,4 +457,12 @@ fn init_tracing(verbose: u8) {
         )
         .with_writer(std::io::stderr)
         .init();
+}
+
+// ── Private helper — guard against missing file early ────────────────────────
+
+#[allow(dead_code)]
+fn _check_fatal() {
+    // This exists solely so `fatal` is reachable from tests if needed.
+    let _ = fatal;
 }

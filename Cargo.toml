@@ -1,6 +1,6 @@
 [package]
 name = "airlock"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Local-first AI security gateway: PII redaction, token compression, and audit ledger"
 repository = "https://github.com/dillonroller/airlock"
@@ -8,6 +8,7 @@ license = "MIT"
 keywords = ["security", "pii", "ai", "privacy", "cli"]
 categories = ["command-line-utilities", "cryptography"]
 authors = ["Dillon Roller"]
+readme = "README.md"
 
 [[bin]]
 name = "airlock"
@@ -17,29 +18,30 @@ path = "src/main.rs"
 # CLI argument parsing
 clap = { version = "4", features = ["derive"] }
 
-# JSON serialization/deserialization with zero-copy support
+# JSON serialization/deserialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Regex engine (zero-copy matching over byte slices)
+# Regex engine
 regex = "1"
 
+# Cryptographic RNG — used for stable-seed alias derivation
 rand = "0.8"
 rand_chacha = "0.3"
 
-# SHA-256 for deterministic seed derivation from PII tokens
+# SHA-256 for deterministic seed derivation from (salt, PII token) pairs
 sha2 = "0.10"
 
 # Parallel processing
 rayon = "1"
 
-# Local SQLite Risk Ledger
+# Local SQLite Risk Ledger (bundled so no system sqlite3 is required)
 rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Timestamps
 chrono = "0.4"
 
-# Logging
+# Structured logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
@@ -47,8 +49,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 thiserror = "1"
 
+# ── Release profile ───────────────────────────────────────────────────────────
+# Produces the smallest, fastest possible single-binary artefact.
 [profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-strip = true
+opt-level     = 3       # Maximum optimisation
+lto           = true    # Link-Time Optimisation for cross-crate inlining
+codegen-units = 1       # Single codegen unit — slower compile, better binary
+panic         = "abort" # Removes unwinding machinery (~5–10% size reduction)
+strip         = true    # Strip debug symbols from the final binary
