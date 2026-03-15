@@ -104,8 +104,7 @@ pub fn load_from(path: &Path) -> Result<AirlockConfig> {
     }
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("Cannot read config '{}'", path.display()))?;
-    toml::from_str(&text)
-        .with_context(|| format!("Invalid TOML in '{}'", path.display()))
+    toml::from_str(&text).with_context(|| format!("Invalid TOML in '{}'", path.display()))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

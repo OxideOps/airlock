@@ -93,16 +93,14 @@ impl CompressOutput {
 ///     `.reduction_pct`, `.swaps`, and `.ledger_id`.
 #[pyfunction]
 #[pyo3(signature = (json_input, salt=None, db_path=None))]
-fn scrub(
-    json_input: &str,
-    salt: Option<&str>,
-    db_path: Option<&str>,
-) -> PyResult<ScrubOutput> {
+fn scrub(json_input: &str, salt: Option<&str>, db_path: Option<&str>) -> PyResult<ScrubOutput> {
     use scrub_mod::{AliasMode, ScrubConfig};
     use std::path::PathBuf;
 
     let alias_mode = match salt {
-        Some(s) => AliasMode::Seeded { salt: s.to_string() },
+        Some(s) => AliasMode::Seeded {
+            salt: s.to_string(),
+        },
         None => AliasMode::Sequential,
     };
 

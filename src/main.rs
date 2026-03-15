@@ -46,9 +46,8 @@ fn parse_json_input(raw: &str, path: &Path) -> Result<Vec<serde_json::Value>> {
             .lines()
             .filter(|l| !l.trim().is_empty())
             .map(|l| {
-                serde_json::from_str(l).with_context(|| {
-                    format!("'{}': invalid NDJSON line: {l:?}", path.display())
-                })
+                serde_json::from_str(l)
+                    .with_context(|| format!("'{}': invalid NDJSON line: {l:?}", path.display()))
             })
             .collect()
     }
@@ -58,9 +57,8 @@ fn parse_json_input(raw: &str, path: &Path) -> Result<Vec<serde_json::Value>> {
 fn build_ner(cfg: &AirlockConfig) -> Result<RegexNer> {
     let mut custom_rules = Vec::new();
     for rule in &cfg.rules {
-        let pattern = regex::Regex::new(&rule.pattern).with_context(|| {
-            format!("Invalid regex in rule '{}': {}", rule.name, rule.pattern)
-        })?;
+        let pattern = regex::Regex::new(&rule.pattern)
+            .with_context(|| format!("Invalid regex in rule '{}': {}", rule.name, rule.pattern))?;
         custom_rules.push(CompiledCustomRule {
             name: rule.name.clone(),
             alias_prefix: rule.alias_prefix.clone(),
@@ -196,9 +194,13 @@ fn run(cli: Cli) -> Result<()> {
     let cfg = config::load().unwrap_or_default();
 
     match cli.command {
-        Commands::Scrub { path, db, diff, output, salt } => {
-            cmd_scrub(&path, db, diff, &output, salt, cfg)
-        }
+        Commands::Scrub {
+            path,
+            db,
+            diff,
+            output,
+            salt,
+        } => cmd_scrub(&path, db, diff, &output, salt, cfg),
         Commands::Compress { path, output } => cmd_compress(&path, &output, cfg),
         Commands::Ledger { db, last } => cmd_ledger(db, last, &cfg),
     }
@@ -251,7 +253,10 @@ fn cmd_scrub(
     if diff && !result.all_records.is_empty() {
         eprintln!("  Swap Detail:");
         for r in &result.all_records {
-            eprintln!("    [{:>12}]  {:35} → {}", r.entity_type, r.original, r.synthetic);
+            eprintln!(
+                "    [{:>12}]  {:35} → {}",
+                r.entity_type, r.original, r.synthetic
+            );
         }
         eprintln!();
     }
@@ -277,7 +282,11 @@ fn cmd_compress(path: &Path, output: &str, cfg: AirlockConfig) -> Result<()> {
     eprintln!("  ╠══════════════════════════════════════════════════════════╣");
     eprintln!(
         "  ║  Source      {:<44} ║",
-        format!("{} ({} entries)", trunc(&path.display().to_string(), 30), result.entry_count)
+        format!(
+            "{} ({} entries)",
+            trunc(&path.display().to_string(), 30),
+            result.entry_count
+        )
     );
     eprintln!(
         "  ║  Schema      {:<44} ║",
@@ -330,9 +339,7 @@ fn cmd_ledger(db: Option<PathBuf>, last: usize, cfg: &AirlockConfig) -> Result<(
     eprintln!(
         "  ║  AIRLOCK — RISK LEDGER ({}){}║",
         db_path.display(),
-        " ".repeat(
-            44_usize.saturating_sub(db_path.display().to_string().len())
-        )
+        " ".repeat(44_usize.saturating_sub(db_path.display().to_string().len()))
     );
     eprintln!("  ╠══════╬════════════════════╬══════════╬═════════╬══════════╬══════════════════╣");
     eprintln!("  ║  ID  ║  Timestamp         ║ Entries  ║  PII    ║  Risk    ║  Compression     ║");
@@ -397,7 +404,11 @@ fn print_scrub_report(result: &scrub::ScrubResult, source: &str, db_path: &str) 
     );
     eprintln!(
         "  ║  Risk Score  {:<44} ║",
-        format!("{:.0}/100  {}  {risk_label}", risk_score, bar(risk_score, 10))
+        format!(
+            "{:.0}/100  {}  {risk_label}",
+            risk_score,
+            bar(risk_score, 10)
+        )
     );
     eprintln!(
         "  ║  Ledger      {:<44} ║",
@@ -426,7 +437,11 @@ fn format_pii_breakdown(counts: &HashMap<EntityType, usize>) -> String {
         .iter()
         .filter_map(|et| {
             let n = counts.get(et).copied().unwrap_or(0);
-            if n > 0 { Some(format!("{n} {et}")) } else { None }
+            if n > 0 {
+                Some(format!("{n} {et}"))
+            } else {
+                None
+            }
         })
         .collect();
     // Custom entities
@@ -435,7 +450,11 @@ fn format_pii_breakdown(counts: &HashMap<EntityType, usize>) -> String {
             parts.push(format!("{n} {et}"));
         }
     }
-    if parts.is_empty() { "none detected".to_string() } else { parts.join(" · ") }
+    if parts.is_empty() {
+        "none detected".to_string()
+    } else {
+        parts.join(" · ")
+    }
 }
 
 fn format_alias_ranges(counts: &HashMap<EntityType, usize>) -> String {
@@ -450,15 +469,28 @@ fn format_alias_ranges(counts: &HashMap<EntityType, usize>) -> String {
     }
     for (et, &n) in counts {
         if !matches!(et, EntityType::Name | EntityType::Email) && n > 0 {
-            parts.push(format!("{}_A..{}_{}", et.alias_prefix(), et.alias_prefix(), nth_label(n)));
+            parts.push(format!(
+                "{}_A..{}_{}",
+                et.alias_prefix(),
+                et.alias_prefix(),
+                nth_label(n)
+            ));
         }
     }
-    if parts.is_empty() { "—".to_string() } else { parts.join("  ·  ") }
+    if parts.is_empty() {
+        "—".to_string()
+    } else {
+        parts.join("  ·  ")
+    }
 }
 
 fn bar(pct: f64, width: usize) -> String {
     let filled = ((pct / 100.0) * width as f64).round() as usize;
-    format!("{}{}", "█".repeat(filled), "░".repeat(width.saturating_sub(filled)))
+    format!(
+        "{}{}",
+        "█".repeat(filled),
+        "░".repeat(width.saturating_sub(filled))
+    )
 }
 
 fn nth_label(n: usize) -> String {

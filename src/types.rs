@@ -26,12 +26,12 @@ impl EntityType {
     /// `alias_x@redacted.dev` format; all other types use `{prefix}_{label}`.
     pub fn alias_prefix(&self) -> &str {
         match self {
-            EntityType::Name       => "User",
-            EntityType::Email      => "alias",
-            EntityType::Phone      => "Phone",
-            EntityType::Ssn        => "SSN",
+            EntityType::Name => "User",
+            EntityType::Email => "alias",
+            EntityType::Phone => "Phone",
+            EntityType::Ssn => "SSN",
             EntityType::CreditCard => "Card",
-            EntityType::IpAddress  => "IP",
+            EntityType::IpAddress => "IP",
             EntityType::Custom { alias_prefix, .. } => alias_prefix.as_str(),
         }
     }
@@ -40,12 +40,12 @@ impl EntityType {
 impl std::fmt::Display for EntityType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EntityType::Name       => write!(f, "Name"),
-            EntityType::Email      => write!(f, "Email"),
-            EntityType::Phone      => write!(f, "Phone"),
-            EntityType::Ssn        => write!(f, "SSN"),
+            EntityType::Name => write!(f, "Name"),
+            EntityType::Email => write!(f, "Email"),
+            EntityType::Phone => write!(f, "Phone"),
+            EntityType::Ssn => write!(f, "SSN"),
             EntityType::CreditCard => write!(f, "CreditCard"),
-            EntityType::IpAddress  => write!(f, "IpAddress"),
+            EntityType::IpAddress => write!(f, "IpAddress"),
             EntityType::Custom { name, .. } => write!(f, "{name}"),
         }
     }

@@ -51,7 +51,11 @@ pub struct AliasEngine {
 
 impl AliasEngine {
     pub fn new(mode: AliasMode) -> Self {
-        Self { map: HashMap::new(), counters: HashMap::new(), mode }
+        Self {
+            map: HashMap::new(),
+            counters: HashMap::new(),
+            mode,
+        }
     }
 
     /// Register `token` (if not already seen) and assign it the next alias.
@@ -109,9 +113,9 @@ fn seeded_alias(salt: &str, entity: &EntityType, token: &str) -> String {
     // Use stable string keys for Name/Email to preserve backward compatibility
     // with aliases generated before v0.3.0.
     let prefix_key = match entity {
-        EntityType::Name  => "name".to_string(),
+        EntityType::Name => "name".to_string(),
         EntityType::Email => "email".to_string(),
-        _                 => entity.alias_prefix().to_lowercase(),
+        _ => entity.alias_prefix().to_lowercase(),
     };
 
     let mut hasher = Sha256::new();
@@ -123,7 +127,9 @@ fn seeded_alias(salt: &str, entity: &EntityType, token: &str) -> String {
     let seed: [u8; 32] = hasher.finalize().into();
 
     let mut rng = ChaCha8Rng::from_seed(seed);
-    let label: String = (0..4).map(|_| (b'A' + rng.gen_range(0u8..26)) as char).collect();
+    let label: String = (0..4)
+        .map(|_| (b'A' + rng.gen_range(0u8..26)) as char)
+        .collect();
 
     match entity {
         EntityType::Email => format!("alias_{}@redacted.dev", label.to_lowercase()),
@@ -234,12 +240,13 @@ pub fn scrub(raw_json: &str, config: ScrubConfig) -> Result<ScrubResult> {
 
     info!("Scrubbing {} log entries", entries.len());
 
-    let ner: Box<dyn Ner> =
-        config.ner.unwrap_or_else(|| Box::new(RegexNer::default()));
+    let ner: Box<dyn Ner> = config.ner.unwrap_or_else(|| Box::new(RegexNer::default()));
 
     // Phase 1: Parallel NER scan.
-    let per_entry_tokens: Vec<Vec<(EntityType, String)>> =
-        entries.par_iter().map(|entry| collect_pii(entry, ner.as_ref())).collect();
+    let per_entry_tokens: Vec<Vec<(EntityType, String)>> = entries
+        .par_iter()
+        .map(|entry| collect_pii(entry, ner.as_ref()))
+        .collect();
 
     // Phase 2: Sequential alias assignment.
     let mut alias_engine = AliasEngine::new(config.alias_mode);
@@ -251,7 +258,10 @@ pub fn scrub(raw_json: &str, config: ScrubConfig) -> Result<ScrubResult> {
         }
     }
     let alias_counts = alias_engine.alias_counts();
-    debug!("{} total PII instances, alias counts: {:?}", total_pii, alias_counts);
+    debug!(
+        "{} total PII instances, alias counts: {:?}",
+        total_pii, alias_counts
+    );
 
     // Phase 3: Parallel alias application.
     let results: Vec<(Value, Vec<SwapRecord>)> = entries
@@ -291,7 +301,13 @@ pub fn scrub(raw_json: &str, config: ScrubConfig) -> Result<ScrubResult> {
         None
     };
 
-    Ok(ScrubResult { compressed, ledger_id, total_pii, alias_counts, all_records })
+    Ok(ScrubResult {
+        compressed,
+        ledger_id,
+        total_pii,
+        alias_counts,
+        all_records,
+    })
 }
 
 // ── Risk score ────────────────────────────────────────────────────────────────
@@ -361,7 +377,14 @@ mod tests {
         let mut engine = AliasEngine::new(AliasMode::Sequential);
         engine.register(&EntityType::Phone, "555-867-5309");
         assert_eq!(engine.get("555-867-5309"), Some("Phone_A"));
-        assert_eq!(engine.alias_counts().get(&EntityType::Phone).copied().unwrap_or(0), 1);
+        assert_eq!(
+            engine
+                .alias_counts()
+                .get(&EntityType::Phone)
+                .copied()
+                .unwrap_or(0),
+            1
+        );
     }
 
     #[test]

@@ -51,9 +51,7 @@ fn ssn_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // NNN-NN-NNNN format. The regex crate does not support lookahead, so we
     // match the common format and accept rare false positives (e.g. phone ext).
-    RE.get_or_init(|| {
-        Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").expect("static regex is valid")
-    })
+    RE.get_or_init(|| Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").expect("static regex is valid"))
 }
 
 fn phone_regex() -> &'static Regex {
@@ -131,7 +129,13 @@ impl Ner for RegexNer {
             ($regex:expr, $etype:expr) => {
                 for m in $regex().find_iter(text) {
                     if !overlaps_existing(&spans, m.start(), m.end()) {
-                        debug!("NER[{}] {:?} {}..{}", $etype, m.as_str(), m.start(), m.end());
+                        debug!(
+                            "NER[{}] {:?} {}..{}",
+                            $etype,
+                            m.as_str(),
+                            m.start(),
+                            m.end()
+                        );
                         spans.push(PiiSpan {
                             entity_type: $etype,
                             start: m.start(),
@@ -158,7 +162,13 @@ impl Ner for RegexNer {
                         name: rule.name.clone(),
                         alias_prefix: rule.alias_prefix.clone(),
                     };
-                    debug!("NER[{}] {:?} {}..{}", rule.name, m.as_str(), m.start(), m.end());
+                    debug!(
+                        "NER[{}] {:?} {}..{}",
+                        rule.name,
+                        m.as_str(),
+                        m.start(),
+                        m.end()
+                    );
                     spans.push(PiiSpan {
                         entity_type: et,
                         start: m.start(),
@@ -266,7 +276,9 @@ mod tests {
     fn detects_credit_card_visa() {
         let ner = RegexNer::default();
         let spans = ner.find_spans("Card: 4111 1111 1111 1111");
-        assert!(spans.iter().any(|s| s.entity_type == EntityType::CreditCard));
+        assert!(spans
+            .iter()
+            .any(|s| s.entity_type == EntityType::CreditCard));
     }
 
     #[test]
@@ -292,7 +304,9 @@ mod tests {
             alias_prefix: "Emp".to_string(),
             pattern: Regex::new(r"\bEMP-\d{5}\b").unwrap(),
         };
-        let ner = RegexNer { custom_rules: vec![rule] };
+        let ner = RegexNer {
+            custom_rules: vec![rule],
+        };
         let spans = ner.find_spans("Employee EMP-00042 logged in");
         assert_eq!(spans.len(), 1);
         match &spans[0].entity_type {
