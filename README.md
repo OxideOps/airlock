@@ -1,6 +1,6 @@
 # Airlock
 
-[![CI](https://github.com/dillonroller/airlock/actions/workflows/ci.yml/badge.svg)](https://github.com/dillonroller/airlock/actions/workflows/ci.yml)
+[![CI](https://github.com/OxideOps/airlock/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/OxideOps/airlock/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/airlock.svg)](https://crates.io/crates/airlock)
 [![PyPI](https://img.shields.io/pypi/v/airlock.svg)](https://pypi.org/project/airlock/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -234,7 +234,7 @@ Requires Python 3.8+. Pre-built wheels for Linux, macOS, and Windows.
 ### CLI — Homebrew
 
 ```bash
-brew install dillonroller/tap/airlock   # coming soon
+brew install OxideOps/homebrew-tap/airlock   # coming soon
 ```
 
 ### CLI — Cargo
@@ -245,14 +245,14 @@ cargo install airlock
 
 ### CLI — pre-built binary
 
-Download from [GitHub Releases](https://github.com/dillonroller/airlock/releases). Single static binary, no runtime dependencies.
+Download from [GitHub Releases](https://github.com/OxideOps/airlock/releases). Single static binary, no runtime dependencies.
 
 ---
 
 ## Building from Source
 
 ```bash
-git clone https://github.com/dillonroller/airlock
+git clone https://github.com/OxideOps/airlock
 cd airlock
 
 # Run tests
