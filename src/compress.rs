@@ -154,7 +154,7 @@ fn entry_to_row(entry: &Value, schema: &[String]) -> Vec<Value> {
 /// Approximate LLM token count using the common `1 token ≈ 4 characters` heuristic.
 #[inline]
 fn approx_tokens(char_count: usize) -> usize {
-    (char_count + 3) / 4
+    char_count.div_ceil(4)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

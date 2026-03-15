@@ -5,7 +5,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing::debug;
 
-use airlock::{compress, error, ledger, scrub};
+use airlock::{compress, ledger, scrub};
 use airlock::error::AirlockError;
 use airlock::scrub::AliasMode;
 
