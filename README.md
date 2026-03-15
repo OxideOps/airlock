@@ -1,5 +1,11 @@
 # Airlock
 
+[![CI](https://github.com/dillonroller/airlock/actions/workflows/ci.yml/badge.svg)](https://github.com/dillonroller/airlock/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/airlock.svg)](https://crates.io/crates/airlock)
+[![PyPI](https://img.shields.io/pypi/v/airlock.svg)](https://pypi.org/project/airlock/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
+
 **Local-first AI security gateway.** Redact PII, cut LLM token costs, and maintain a full audit trail — without sending a single byte to the cloud.
 
 ```bash
