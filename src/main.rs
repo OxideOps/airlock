@@ -1,17 +1,16 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tracing::debug;
 
-mod compress;
-mod ledger;
-mod ner;
-mod scrub;
-mod types;
-
-use scrub::AliasMode;
+use airlock::config::{self, AirlockConfig};
+use airlock::ner::{CompiledCustomRule, RegexNer};
+use airlock::scrub::AliasMode;
+use airlock::types::EntityType;
+use airlock::{compress, ledger, scrub};
 
 // ── ANSI helpers ──────────────────────────────────────────────────────────────
 
@@ -23,7 +22,6 @@ fn fatal(msg: &str) -> ! {
     process::exit(1);
 }
 
-/// Read a file to a `String`, emitting user-friendly errors for common failures.
 fn require_file(path: &Path) -> Result<String> {
     match std::fs::read_to_string(path) {
         Ok(s) => Ok(s),
@@ -31,50 +29,83 @@ fn require_file(path: &Path) -> Result<String> {
             anyhow::bail!("File not found: '{}'", path.display())
         }
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            anyhow::bail!("Permission denied. Cannot read '{}'", path.display())
+            anyhow::bail!("Permission denied reading '{}'", path.display())
         }
         Err(e) => Err(e.into()),
     }
+}
+
+/// Parse either a JSON array (`[{...}, ...]`) or NDJSON (one object per line).
+fn parse_json_input(raw: &str, path: &Path) -> Result<Vec<serde_json::Value>> {
+    let trimmed = raw.trim_start();
+    if trimmed.starts_with('[') {
+        serde_json::from_str(trimmed)
+            .with_context(|| format!("'{}' is not a valid JSON array", path.display()))
+    } else {
+        trimmed
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                serde_json::from_str(l).with_context(|| {
+                    format!("'{}': invalid NDJSON line: {l:?}", path.display())
+                })
+            })
+            .collect()
+    }
+}
+
+/// Build a [`RegexNer`] from the active config's custom rules.
+fn build_ner(cfg: &AirlockConfig) -> Result<RegexNer> {
+    let mut custom_rules = Vec::new();
+    for rule in &cfg.rules {
+        let pattern = regex::Regex::new(&rule.pattern).with_context(|| {
+            format!("Invalid regex in rule '{}': {}", rule.name, rule.pattern)
+        })?;
+        custom_rules.push(CompiledCustomRule {
+            name: rule.name.clone(),
+            alias_prefix: rule.alias_prefix.clone(),
+            pattern,
+        });
+    }
+    Ok(RegexNer { custom_rules })
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 /// Airlock — Local-first AI Security Gateway
 ///
-/// Airlock protects your data before it ever reaches an AI model.
-/// It intercepts JSON log files, redacts PII with consistent synthetic
-/// aliases, compresses token overhead, and maintains a local audit ledger
-/// — all without sending a single byte to the cloud.
+/// Airlock protects your data before it reaches an AI model.
+/// It intercepts JSON (or NDJSON) log files, redacts PII with consistent
+/// synthetic aliases, compresses token overhead, and maintains a local audit
+/// ledger — all without sending a single byte to the cloud.
 ///
 /// QUICK START
 ///   airlock scrub logs.json --diff
 ///   airlock compress logs.json
 ///   airlock ledger
+///
+/// CONFIG FILE
+///   Drop a .airlock.toml in the current directory to set defaults:
+///
+///     [scrub]
+///     salt = "my-org-secret"
+///
+///     [[rules]]
+///     name         = "EmployeeId"
+///     pattern      = "EMP-\\d{5}"
+///     alias_prefix = "Emp"
 #[derive(Parser, Debug)]
 #[command(
     name = "airlock",
     version,
     author,
     about = "Local-first AI security gateway: PII redaction, token compression, and audit ledger",
-    long_about = "Airlock is a local-first AI security gateway written in Rust.\n\
-                  \n\
-                  It solves three enterprise problems:\n\
-                  \n\
-                  1. SYNTHETIC DATA SWAPPING — replaces real names and emails with consistent\n\
-                     session-scoped aliases (e.g. 'Dillon Roller' → 'User_A') so AI models\n\
-                     can follow conversational logic without ever seeing real identities.\n\
-                  \n\
-                  2. TOKEN-TAX COMPRESSION — extracts repeated JSON keys into a single schema\n\
-                     header, reducing LLM token count by 20–60% and cutting API costs.\n\
-                  \n\
-                  3. RISK LEDGER — persists an auditable SQLite record of every scrub session:\n\
-                     timestamp, PII count, risk score, and compression savings.",
     propagate_version = true,
     subcommand_required = true,
     arg_required_else_help = true
 )]
 struct Cli {
-    /// Verbosity level: -v info, -vv debug, -vvv trace
+    /// Verbosity: -v info, -vv debug, -vvv trace
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
 
@@ -86,79 +117,63 @@ struct Cli {
 enum Commands {
     /// Redact PII, compress tokens, and write an audit entry to the Risk Ledger.
     ///
-    /// Reads a JSON array of log objects from PATH.  Every name and email address
-    /// found is replaced with a stable session alias (User_A, alias_a@redacted.dev).
-    /// The same identity always maps to the same alias within the run, so AI models
-    /// can still reason about behaviour patterns without seeing real data.
+    /// Reads a JSON array or NDJSON file from PATH. Every name, email, phone,
+    /// SSN, credit card, and IP address found is replaced with a stable alias.
+    /// The same identity always maps to the same alias within the run.
     ///
-    /// Passing --salt enables cross-run stability: the same real identity will map
-    /// to the same alias every time, across any number of files, as long as the
-    /// same salt is supplied.
-    ///
-    /// OUTPUT
-    ///   Compressed JSON → stdout  (pipeable to a file or another process)
-    ///   Report + swaps  → stderr
+    /// Use --salt for cross-run stability: the same real identity maps to the
+    /// same alias across any number of files, as long as the same salt is used.
     ///
     /// EXAMPLES
     ///   airlock scrub logs.json --diff
-    ///   airlock scrub logs.json --salt mysecret --diff > clean.json
+    ///   airlock scrub logs.ndjson --salt mysecret --diff > clean.json
     Scrub {
-        /// Path to a JSON file containing an array of log objects
+        /// Path to a JSON array or NDJSON file
         path: PathBuf,
 
-        /// Path to the SQLite Risk Ledger database [default: airlock_ledger.db]
-        #[arg(long, default_value = "airlock_ledger.db", value_name = "FILE")]
-        db: PathBuf,
+        /// Path to the SQLite Risk Ledger [default: airlock_ledger.db]
+        #[arg(long, value_name = "FILE")]
+        db: Option<PathBuf>,
 
-        /// Print a detailed swap table to stderr (original → alias for every hit)
+        /// Print a detailed swap table to stderr
         #[arg(short, long)]
         diff: bool,
 
-        /// Output format for the compressed JSON: pretty or compact
+        /// Output format: pretty (default) or compact
         #[arg(short, long, default_value = "pretty", value_name = "FORMAT")]
         output: String,
 
-        /// Enable stable cross-run aliases by seeding alias derivation with SALT.
-        ///
-        /// When set, the same real identity always maps to the same synthetic alias
-        /// regardless of file order or which records are present.  Keep this value
-        /// secret — it is the only thing preventing alias reversal.
+        /// Enable stable cross-run aliases by seeding with SALT
         #[arg(long, value_name = "SALT")]
         salt: Option<String>,
     },
 
     /// Compress a JSON log file without PII redaction.
     ///
-    /// Extracts all repeated top-level JSON keys into a single '__airlock_schema'
-    /// header and converts each log object into a compact value array.  No PII
-    /// detection is performed — use 'scrub' if you need redaction too.
+    /// Extracts repeated top-level keys into a single schema header,
+    /// reducing LLM token count by 20-60%. Accepts JSON arrays or NDJSON.
     ///
     /// EXAMPLES
     ///   airlock compress logs.json
-    ///   airlock compress logs.json --output compact > compressed.json
+    ///   airlock compress logs.ndjson --output compact > compressed.json
     Compress {
-        /// Path to a JSON file containing an array of log objects
+        /// Path to a JSON array or NDJSON file
         path: PathBuf,
 
-        /// Output format: pretty or compact
+        /// Output format: pretty (default) or compact
         #[arg(short, long, default_value = "pretty", value_name = "FORMAT")]
         output: String,
     },
 
     /// Display recent entries from the local Risk Ledger.
     ///
-    /// Each row represents one 'airlock scrub' session and shows the source file,
-    /// number of PII entities found, the computed risk score (0–100), and the
-    /// token compression savings achieved.
-    ///
     /// EXAMPLES
     ///   airlock ledger
-    ///   airlock ledger --last 20
-    ///   airlock ledger --db /path/to/custom.db
+    ///   airlock ledger --last 20 --db /path/to/custom.db
     Ledger {
-        /// Path to the SQLite Risk Ledger database [default: airlock_ledger.db]
-        #[arg(long, default_value = "airlock_ledger.db", value_name = "FILE")]
-        db: PathBuf,
+        /// Path to the SQLite Risk Ledger [default: airlock_ledger.db]
+        #[arg(long, value_name = "FILE")]
+        db: Option<PathBuf>,
 
         /// Number of most-recent entries to display
         #[arg(short, long, default_value = "10", value_name = "N")]
@@ -178,16 +193,14 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    let cfg = config::load().unwrap_or_default();
+
     match cli.command {
-        Commands::Scrub {
-            path,
-            db,
-            diff,
-            output,
-            salt,
-        } => cmd_scrub(&path, &db, diff, &output, salt),
-        Commands::Compress { path, output } => cmd_compress(&path, &output),
-        Commands::Ledger { db, last } => cmd_ledger(&db, last),
+        Commands::Scrub { path, db, diff, output, salt } => {
+            cmd_scrub(&path, db, diff, &output, salt, cfg)
+        }
+        Commands::Compress { path, output } => cmd_compress(&path, &output, cfg),
+        Commands::Ledger { db, last } => cmd_ledger(db, last, &cfg),
     }
 }
 
@@ -195,39 +208,50 @@ fn run(cli: Cli) -> Result<()> {
 
 fn cmd_scrub(
     path: &Path,
-    db: &Path,
+    db: Option<PathBuf>,
     diff: bool,
     output: &str,
     salt: Option<String>,
+    cfg: AirlockConfig,
 ) -> Result<()> {
     let raw = require_file(path)?;
     debug!("Loaded {} bytes from '{}'", raw.len(), path.display());
 
-    let alias_mode = match salt {
+    // CLI flags take precedence over config file
+    let effective_salt = salt.or_else(|| cfg.scrub.salt.clone());
+    let effective_db: Option<PathBuf> = db
+        .or_else(|| cfg.scrub.db.clone())
+        .or_else(|| Some(PathBuf::from("airlock_ledger.db")));
+
+    let alias_mode = match &effective_salt {
         Some(s) => {
             eprintln!("  ℹ  Stable-seed mode enabled — aliases are cross-run deterministic.");
-            AliasMode::Seeded { salt: s }
+            AliasMode::Seeded { salt: s.clone() }
         }
         None => AliasMode::Sequential,
     };
 
-    let config = scrub::ScrubConfig {
-        db_path: db,
+    let ner = build_ner(&cfg)?;
+
+    let scrub_config = scrub::ScrubConfig {
+        db_path: effective_db.clone(),
         source_path: path.display().to_string(),
         alias_mode,
+        ner: Some(Box::new(ner)),
     };
 
-    let result = scrub::scrub(&raw, config)?;
+    let result = scrub::scrub(&raw, scrub_config)?;
+    let db_display = effective_db
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "none".to_string());
 
-    print_scrub_report(&result, &path.display().to_string(), &db.display().to_string());
+    print_scrub_report(&result, &path.display().to_string(), &db_display);
 
     if diff && !result.all_records.is_empty() {
         eprintln!("  Swap Detail:");
         for r in &result.all_records {
-            eprintln!(
-                "    [{:>10}]  {:35} → {}",
-                r.entity_type, r.original, r.synthetic
-            );
+            eprintln!("    [{:>12}]  {:35} → {}", r.entity_type, r.original, r.synthetic);
         }
         eprintln!();
     }
@@ -240,14 +264,11 @@ fn cmd_scrub(
     Ok(())
 }
 
-fn cmd_compress(path: &Path, output: &str) -> Result<()> {
+fn cmd_compress(path: &Path, output: &str, cfg: AirlockConfig) -> Result<()> {
     let raw = require_file(path)?;
     debug!("Loaded {} bytes from '{}'", raw.len(), path.display());
 
-    let entries: Vec<serde_json::Value> = serde_json::from_str(&raw).map_err(|e| {
-        anyhow::anyhow!("'{}' is not a valid JSON array: {e}", path.display())
-    })?;
-
+    let entries = parse_json_input(&raw, path)?;
     let result = compress::compress(&entries)?;
 
     eprintln!();
@@ -256,11 +277,7 @@ fn cmd_compress(path: &Path, output: &str) -> Result<()> {
     eprintln!("  ╠══════════════════════════════════════════════════════════╣");
     eprintln!(
         "  ║  Source      {:<44} ║",
-        format!(
-            "{} ({} entries)",
-            trunc(&path.display().to_string(), 30),
-            result.entry_count
-        )
+        format!("{} ({} entries)", trunc(&path.display().to_string(), 30), result.entry_count)
     );
     eprintln!(
         "  ║  Schema      {:<44} ║",
@@ -276,6 +293,9 @@ fn cmd_compress(path: &Path, output: &str) -> Result<()> {
     eprintln!("  ╚══════════════════════════════════════════════════════════╝");
     eprintln!();
 
+    // suppress unused warning on cfg — it exists for future redact toggle support
+    let _ = cfg;
+
     let json_out = match output {
         "compact" => serde_json::to_string(&result.output)?,
         _ => serde_json::to_string_pretty(&result.output)?,
@@ -284,16 +304,20 @@ fn cmd_compress(path: &Path, output: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_ledger(db: &Path, last: usize) -> Result<()> {
-    if !db.exists() {
+fn cmd_ledger(db: Option<PathBuf>, last: usize, cfg: &AirlockConfig) -> Result<()> {
+    let db_path = db
+        .or_else(|| cfg.scrub.db.clone())
+        .unwrap_or_else(|| PathBuf::from("airlock_ledger.db"));
+
+    if !db_path.exists() {
         eprintln!(
             "No ledger found at '{}'. Run 'airlock scrub <file>' first.",
-            db.display()
+            db_path.display()
         );
         return Ok(());
     }
 
-    let ledger = ledger::Ledger::open(db)?;
+    let ledger = ledger::Ledger::open(&db_path)?;
     let rows = ledger.recent(last)?;
 
     if rows.is_empty() {
@@ -304,8 +328,11 @@ fn cmd_ledger(db: &Path, last: usize) -> Result<()> {
     eprintln!();
     eprintln!("  ╔══════╦════════════════════╦══════════╦═════════╦══════════╦══════════════════╗");
     eprintln!(
-        "  ║  AIRLOCK — RISK LEDGER ({})                                              ║",
-        db.display()
+        "  ║  AIRLOCK — RISK LEDGER ({}){}║",
+        db_path.display(),
+        " ".repeat(
+            44_usize.saturating_sub(db_path.display().to_string().len())
+        )
     );
     eprintln!("  ╠══════╬════════════════════╬══════════╬═════════╬══════════╬══════════════════╣");
     eprintln!("  ║  ID  ║  Timestamp         ║ Entries  ║  PII    ║  Risk    ║  Compression     ║");
@@ -349,17 +376,14 @@ fn print_scrub_report(result: &scrub::ScrubResult, source: &str, db_path: &str) 
     eprintln!(
         "  ║  PII Found   {:<44} ║",
         format!(
-            "{} entities  ({} names · {} emails)",
-            result.total_pii, result.name_aliases, result.email_aliases
+            "{} entities  ({})",
+            result.total_pii,
+            format_pii_breakdown(&result.alias_counts)
         )
     );
     eprintln!(
         "  ║  Aliases     {:<44} ║",
-        format!(
-            "User_A..{}  ·  alias_a..{}",
-            nth_label(result.name_aliases),
-            nth_label(result.email_aliases).to_lowercase()
-        )
+        format_alias_ranges(&result.alias_counts)
     );
     eprintln!(
         "  ║  Compression {:<44} ║",
@@ -373,15 +397,14 @@ fn print_scrub_report(result: &scrub::ScrubResult, source: &str, db_path: &str) 
     );
     eprintln!(
         "  ║  Risk Score  {:<44} ║",
-        format!(
-            "{:.0}/100  {}  {risk_label}",
-            risk_score,
-            bar(risk_score, 10)
-        )
+        format!("{:.0}/100  {}  {risk_label}", risk_score, bar(risk_score, 10))
     );
     eprintln!(
         "  ║  Ledger      {:<44} ║",
-        format!("Entry #{} → {}", result.ledger_id, db_path)
+        match result.ledger_id {
+            Some(id) => format!("Entry #{id} → {db_path}"),
+            None => "skipped (no db configured)".to_string(),
+        }
     );
     eprintln!("  ╚══════════════════════════════════════════════════════════╝");
     eprintln!();
@@ -389,17 +412,55 @@ fn print_scrub_report(result: &scrub::ScrubResult, source: &str, db_path: &str) 
 
 // ── Display helpers ───────────────────────────────────────────────────────────
 
-/// Render a filled/empty progress bar of `width` cells.
-fn bar(pct: f64, width: usize) -> String {
-    let filled = ((pct / 100.0) * width as f64).round() as usize;
-    format!(
-        "{}{}",
-        "█".repeat(filled),
-        "░".repeat(width.saturating_sub(filled))
-    )
+fn format_pii_breakdown(counts: &HashMap<EntityType, usize>) -> String {
+    // Fixed display order for built-in types
+    let ordered = [
+        EntityType::Name,
+        EntityType::Email,
+        EntityType::Phone,
+        EntityType::Ssn,
+        EntityType::CreditCard,
+        EntityType::IpAddress,
+    ];
+    let mut parts: Vec<String> = ordered
+        .iter()
+        .filter_map(|et| {
+            let n = counts.get(et).copied().unwrap_or(0);
+            if n > 0 { Some(format!("{n} {et}")) } else { None }
+        })
+        .collect();
+    // Custom entities
+    for (et, &n) in counts {
+        if matches!(et, EntityType::Custom { .. }) && n > 0 {
+            parts.push(format!("{n} {et}"));
+        }
+    }
+    if parts.is_empty() { "none detected".to_string() } else { parts.join(" · ") }
 }
 
-/// Return the last alias label for `n` unique aliases (e.g. `n=3` → `"C"`).
+fn format_alias_ranges(counts: &HashMap<EntityType, usize>) -> String {
+    let names = counts.get(&EntityType::Name).copied().unwrap_or(0);
+    let emails = counts.get(&EntityType::Email).copied().unwrap_or(0);
+    let mut parts = Vec::new();
+    if names > 0 {
+        parts.push(format!("User_A..{}", nth_label(names)));
+    }
+    if emails > 0 {
+        parts.push(format!("alias_a..{}", nth_label(emails).to_lowercase()));
+    }
+    for (et, &n) in counts {
+        if !matches!(et, EntityType::Name | EntityType::Email) && n > 0 {
+            parts.push(format!("{}_A..{}_{}", et.alias_prefix(), et.alias_prefix(), nth_label(n)));
+        }
+    }
+    if parts.is_empty() { "—".to_string() } else { parts.join("  ·  ") }
+}
+
+fn bar(pct: f64, width: usize) -> String {
+    let filled = ((pct / 100.0) * width as f64).round() as usize;
+    format!("{}{}", "█".repeat(filled), "░".repeat(width.saturating_sub(filled)))
+}
+
 fn nth_label(n: usize) -> String {
     if n == 0 {
         return "—".to_string();
@@ -407,7 +468,6 @@ fn nth_label(n: usize) -> String {
     label_for(n.saturating_sub(1))
 }
 
-/// Excel-style label for zero-based index `n`.
 fn label_for(mut n: usize) -> String {
     let mut s = String::new();
     loop {
@@ -420,7 +480,6 @@ fn label_for(mut n: usize) -> String {
     s
 }
 
-/// Truncate `s` to at most `max` characters, prepending `…` if truncated.
 fn trunc(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_owned()
@@ -429,7 +488,6 @@ fn trunc(s: &str, max: usize) -> String {
     }
 }
 
-/// Risk score for display (mirrors the library calculation).
 fn compute_risk_display(pii: usize, entries: usize) -> f64 {
     if entries == 0 {
         return 0.0;
@@ -437,7 +495,6 @@ fn compute_risk_display(pii: usize, entries: usize) -> f64 {
     (pii as f64 / entries as f64 * 25.0).min(100.0)
 }
 
-/// Initialise the `tracing` subscriber based on the `-v` verbosity flag.
 fn init_tracing(verbose: u8) {
     let level = match verbose {
         0 => "warn",

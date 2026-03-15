@@ -1,56 +1,45 @@
 [package]
 name = "airlock"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Local-first AI security gateway: PII redaction, token compression, and audit ledger"
 repository = "https://github.com/dillonroller/airlock"
 authors = ["Dillon Roller"]
-publish = false
 readme = "README.md"
+license = "Apache-2.0"
+
+[lib]
+name = "airlock"
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "airlock"
 path = "src/main.rs"
 
+[features]
+python = ["dep:pyo3"]
+
 [dependencies]
-# CLI argument parsing
-clap = { version = "4", features = ["derive"] }
-
-# JSON serialization/deserialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-
-# Regex engine
-regex = "1"
-
-# Cryptographic RNG — used for stable-seed alias derivation
-rand = "0.8"
-rand_chacha = "0.3"
-
-# SHA-256 for deterministic seed derivation from (salt, PII token) pairs
-sha2 = "0.10"
-
-# Parallel processing
-rayon = "1"
-
-# Local SQLite Risk Ledger (bundled so no system sqlite3 is required)
-rusqlite = { version = "0.31", features = ["bundled"] }
-
-# Timestamps
-chrono = "0.4"
-
-# Structured logging
-tracing = "0.1"
+clap          = { version = "4",    features = ["derive"] }
+serde         = { version = "1",    features = ["derive"] }
+serde_json    = "1"
+regex         = "1"
+rand          = "0.8"
+rand_chacha   = "0.3"
+sha2          = "0.10"
+rayon         = "1"
+rusqlite      = { version = "0.31", features = ["bundled"] }
+chrono        = "0.4"
+tracing       = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Error handling
-anyhow = "1"
+anyhow        = "1"
+toml          = "0.8"
+pyo3          = { version = "0.21", features = ["extension-module"], optional = true }
 
 # ── Release profile ───────────────────────────────────────────────────────────
-# Produces the smallest, fastest possible single-binary artefact.
 [profile.release]
-opt-level     = 3       # Maximum optimisation
-lto           = true    # Link-Time Optimisation for cross-crate inlining
-codegen-units = 1       # Single codegen unit — slower compile, better binary
-panic         = "abort" # Removes unwinding machinery (~5–10% size reduction)
-strip         = true    # Strip debug symbols from the final binary
+opt-level     = 3
+lto           = true
+codegen-units = 1
+strip         = true
+# panic = "abort" omitted — pyo3 requires unwinding to propagate Python exceptions

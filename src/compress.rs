@@ -60,7 +60,7 @@ pub struct CompressResult {
 ///
 /// ```
 /// use serde_json::json;
-/// use crate::compress::compress;
+/// use airlock::compress::compress;
 ///
 /// let entries: Vec<serde_json::Value> = (0..10)
 ///     .map(|i| json!({"user": format!("User_{i}"), "action": "login"}))
