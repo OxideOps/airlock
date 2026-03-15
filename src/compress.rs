@@ -27,7 +27,7 @@ use std::collections::HashSet;
 
 use serde_json::{json, Value};
 
-use crate::error::AirlockError;
+use anyhow::Result;
 
 // ── Output type ───────────────────────────────────────────────────────────────
 
@@ -60,7 +60,7 @@ pub struct CompressResult {
 ///
 /// ```
 /// use serde_json::json;
-/// use airlock::compress::compress;
+/// use crate::compress::compress;
 ///
 /// let entries: Vec<serde_json::Value> = (0..10)
 ///     .map(|i| json!({"user": format!("User_{i}"), "action": "login"}))
@@ -72,9 +72,9 @@ pub struct CompressResult {
 ///
 /// # Errors
 ///
-/// Returns [`AirlockError::Json`] if the input values cannot be serialised.
+/// Returns an error if the input values cannot be serialised.
 /// In practice this is infallible for well-formed [`serde_json::Value`]s.
-pub fn compress(entries: &[Value]) -> Result<CompressResult, AirlockError> {
+pub fn compress(entries: &[Value]) -> Result<CompressResult> {
     let before_str = serde_json::to_string(entries)?;
     let tokens_before = approx_tokens(before_str.len());
 

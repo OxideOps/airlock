@@ -21,7 +21,6 @@ use tracing::{debug, info};
 
 use crate::{
     compress::{self, CompressResult},
-    error::AirlockError,
     ledger::Ledger,
     ner::{Ner, RegexNer},
     types::{EntityType, LedgerEntry, SwapRecord},
@@ -312,13 +311,11 @@ pub struct ScrubResult {
 ///
 /// # Errors
 ///
-/// Returns [`AirlockError::InvalidJson`] if `raw_json` is not a JSON array,
+/// Returns an error if `raw_json` is not a JSON array,
 /// or propagates ledger / compression errors.
 pub fn scrub(raw_json: &str, config: ScrubConfig<'_>) -> Result<ScrubResult> {
     let entries: Vec<Value> = serde_json::from_str(raw_json).map_err(|e| {
-        AirlockError::InvalidJson {
-            detail: e.to_string(),
-        }
+        anyhow::anyhow!("Invalid JSON: {e}")
     })?;
 
     info!("Scrubbing {} log entries", entries.len());

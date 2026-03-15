@@ -5,9 +5,13 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing::debug;
 
-use airlock::{compress, ledger, scrub};
-use airlock::error::AirlockError;
-use airlock::scrub::AliasMode;
+mod compress;
+mod ledger;
+mod ner;
+mod scrub;
+mod types;
+
+use scrub::AliasMode;
 
 // ── ANSI helpers ──────────────────────────────────────────────────────────────
 
@@ -24,16 +28,10 @@ fn require_file(path: &Path) -> Result<String> {
     match std::fs::read_to_string(path) {
         Ok(s) => Ok(s),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Err(AirlockError::FileNotFound {
-                path: path.display().to_string(),
-            }
-            .into())
+            anyhow::bail!("File not found: '{}'", path.display())
         }
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            Err(AirlockError::PermissionDenied {
-                path: path.display().to_string(),
-            }
-            .into())
+            anyhow::bail!("Permission denied. Cannot read '{}'", path.display())
         }
         Err(e) => Err(e.into()),
     }
@@ -247,9 +245,7 @@ fn cmd_compress(path: &Path, output: &str) -> Result<()> {
     debug!("Loaded {} bytes from '{}'", raw.len(), path.display());
 
     let entries: Vec<serde_json::Value> = serde_json::from_str(&raw).map_err(|e| {
-        AirlockError::InvalidJson {
-            detail: format!("'{}' is not a valid JSON array: {e}", path.display()),
-        }
+        anyhow::anyhow!("'{}' is not a valid JSON array: {e}", path.display())
     })?;
 
     let result = compress::compress(&entries)?;
