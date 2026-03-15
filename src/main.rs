@@ -458,11 +458,3 @@ fn init_tracing(verbose: u8) {
         .with_writer(std::io::stderr)
         .init();
 }
-
-// ── Private helper — guard against missing file early ────────────────────────
-
-#[allow(dead_code)]
-fn _check_fatal() {
-    // This exists solely so `fatal` is reachable from tests if needed.
-    let _ = fatal;
-}

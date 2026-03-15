@@ -2,9 +2,6 @@
 
 > **Local-first AI Security Gateway** — PII redaction, token compression, and audit ledger in a single Rust binary.
 
-[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-2021-orange.svg)](https://www.rust-lang.org)
-
 Airlock sits **between your raw data and any AI model**, ensuring sensitive information is never sent to the cloud. It intercepts JSON log files, replaces real identities with consistent synthetic aliases, compresses token overhead by 20–60 %, and writes an auditable SQLite record of every run.
 
 ---
@@ -173,9 +170,3 @@ cargo clippy -- -D warnings
 # Generate docs
 cargo doc --open
 ```
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE).

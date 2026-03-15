@@ -4,10 +4,8 @@ version = "0.2.0"
 edition = "2021"
 description = "Local-first AI security gateway: PII redaction, token compression, and audit ledger"
 repository = "https://github.com/dillonroller/airlock"
-license = "MIT"
-keywords = ["security", "pii", "ai", "privacy", "cli"]
-categories = ["command-line-utilities", "cryptography"]
 authors = ["Dillon Roller"]
+publish = false
 readme = "README.md"
 
 [[bin]]
