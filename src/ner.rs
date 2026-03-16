@@ -83,10 +83,8 @@ fn international_phone_regex() -> &'static Regex {
     // E.164 formatted:  +44 7911 123456, +49 30 12345678, +1 415 555 1234
     // Country code 1–4 digits; total 10–15 digits per E.164 standard.
     RE.get_or_init(|| {
-        Regex::new(
-            r"\+[1-9]\d{9,13}\b|\+[1-9]\d{0,3}[\s.\-]\d{2,9}(?:[\s.\-]\d{2,9}){0,4}\b",
-        )
-        .expect("static regex is valid")
+        Regex::new(r"\+[1-9]\d{9,13}\b|\+[1-9]\d{0,3}[\s.\-]\d{2,9}(?:[\s.\-]\d{2,9}){0,4}\b")
+            .expect("static regex is valid")
     })
 }
 
@@ -122,9 +120,7 @@ fn jwt_regex() -> &'static Regex {
 fn aws_key_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // AWS access key IDs begin with AKIA followed by 16 uppercase alphanumerics.
-    RE.get_or_init(|| {
-        Regex::new(r"\bAKIA[0-9A-Z]{16}\b").expect("static regex is valid")
-    })
+    RE.get_or_init(|| Regex::new(r"\bAKIA[0-9A-Z]{16}\b").expect("static regex is valid"))
 }
 
 fn env_secret_regex() -> &'static Regex {
@@ -576,7 +572,7 @@ mod tests {
     fn luhn_accepts_valid_card_numbers() {
         assert!(luhn_valid("4111111111111111")); // Visa test card
         assert!(luhn_valid("5500005555555559")); // Mastercard test card
-        assert!(luhn_valid("371449635398431"));  // Amex test card
+        assert!(luhn_valid("371449635398431")); // Amex test card
     }
 
     #[test]
@@ -584,7 +580,9 @@ mod tests {
         let ner = RegexNer::default();
         // Matches card pattern but fails Luhn
         let spans = ner.find_spans("4111 1111 1111 1112");
-        assert!(spans.iter().all(|s| s.entity_type != EntityType::CreditCard));
+        assert!(spans
+            .iter()
+            .all(|s| s.entity_type != EntityType::CreditCard));
     }
 
     #[test]
@@ -613,15 +611,27 @@ mod tests {
     #[test]
     fn detects_international_phone_compact_e164() {
         let ner = RegexNer::default();
-        assert!(ner.find_spans("Call +447911123456 now").iter().any(|s| s.entity_type == EntityType::Phone));
-        assert!(ner.find_spans("Reach +14155551234 here").iter().any(|s| s.entity_type == EntityType::Phone));
+        assert!(ner
+            .find_spans("Call +447911123456 now")
+            .iter()
+            .any(|s| s.entity_type == EntityType::Phone));
+        assert!(ner
+            .find_spans("Reach +14155551234 here")
+            .iter()
+            .any(|s| s.entity_type == EntityType::Phone));
     }
 
     #[test]
     fn detects_international_phone_formatted() {
         let ner = RegexNer::default();
-        assert!(ner.find_spans("+44 7911 123456").iter().any(|s| s.entity_type == EntityType::Phone));
-        assert!(ner.find_spans("+49 30 12345678").iter().any(|s| s.entity_type == EntityType::Phone));
+        assert!(ner
+            .find_spans("+44 7911 123456")
+            .iter()
+            .any(|s| s.entity_type == EntityType::Phone));
+        assert!(ner
+            .find_spans("+49 30 12345678")
+            .iter()
+            .any(|s| s.entity_type == EntityType::Phone));
     }
 
     #[test]
