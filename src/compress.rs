@@ -76,7 +76,7 @@ pub struct CompressResult {
 /// In practice this is infallible for well-formed [`serde_json::Value`]s.
 pub fn compress(entries: &[Value]) -> Result<CompressResult> {
     let before_str = serde_json::to_string(entries)?;
-    let tokens_before = approx_tokens(before_str.len());
+    let tokens_before = approx_tokens(&before_str);
 
     let schema = extract_schema(entries);
 
@@ -92,7 +92,7 @@ pub fn compress(entries: &[Value]) -> Result<CompressResult> {
     });
 
     let after_str = serde_json::to_string(&output)?;
-    let tokens_after = approx_tokens(after_str.len());
+    let tokens_after = approx_tokens(&after_str);
 
     let reduction_pct = if tokens_before > 0 {
         tokens_before.saturating_sub(tokens_after) as f64 / tokens_before as f64 * 100.0
@@ -152,8 +152,8 @@ fn entry_to_row(entry: &Value, schema: &[String]) -> Vec<Value> {
 
 /// Approximate LLM token count using the common `1 token ≈ 4 characters` heuristic.
 #[inline]
-fn approx_tokens(char_count: usize) -> usize {
-    char_count.div_ceil(4)
+fn approx_tokens(s: &str) -> usize {
+    s.chars().count().div_ceil(4)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

@@ -22,7 +22,7 @@ use crate::{
     compress::{self, CompressResult},
     ledger::Ledger,
     ner::{Ner, RegexNer},
-    types::{EntityType, LedgerEntry, SwapRecord},
+    types::{EntityType, LedgerEntry, PiiSpan, SwapRecord},
 };
 
 // ── Alias Mode ────────────────────────────────────────────────────────────────
@@ -83,10 +83,14 @@ impl AliasEngine {
         self.counters.clone()
     }
 
-    /// Apply the alias map to a JSON value tree in-place.
-    pub fn apply_to_value(&self, value: &mut Value, ner: &dyn Ner) -> Vec<SwapRecord> {
+    /// Apply the alias map to a JSON value tree in-place using pre-computed span cache.
+    pub fn apply_to_value(
+        &self,
+        value: &mut Value,
+        span_cache: &HashMap<String, Vec<PiiSpan>>,
+    ) -> Vec<SwapRecord> {
         let mut records = Vec::new();
-        apply_recursive(value, self, ner, &mut records);
+        apply_recursive(value, self, span_cache, &mut records);
         records
     }
 
@@ -142,18 +146,19 @@ fn seeded_alias(salt: &str, entity: &EntityType, token: &str) -> String {
 fn apply_recursive(
     value: &mut Value,
     engine: &AliasEngine,
-    ner: &dyn Ner,
+    span_cache: &HashMap<String, Vec<PiiSpan>>,
     records: &mut Vec<SwapRecord>,
 ) {
     match value {
         Value::String(s) => {
-            let spans = ner.find_spans(s.as_str());
+            let empty = Vec::new();
+            let spans = span_cache.get(s.as_str()).unwrap_or(&empty);
             if spans.is_empty() {
                 return;
             }
             let mut out = String::with_capacity(s.len());
             let mut cursor = 0usize;
-            for span in &spans {
+            for span in spans {
                 out.push_str(&s[cursor..span.start]);
                 if let Some(alias) = engine.get(&span.text) {
                     records.push(SwapRecord {
@@ -172,12 +177,12 @@ fn apply_recursive(
         }
         Value::Array(arr) => {
             for item in arr.iter_mut() {
-                apply_recursive(item, engine, ner, records);
+                apply_recursive(item, engine, span_cache, records);
             }
         }
         Value::Object(map) => {
             for val in map.values_mut() {
-                apply_recursive(val, engine, ner, records);
+                apply_recursive(val, engine, span_cache, records);
             }
         }
         _ => {}
@@ -186,22 +191,41 @@ fn apply_recursive(
 
 // ── PII collection ────────────────────────────────────────────────────────────
 
+/// Per-entry scan result: flat token list + map from string value → its NER spans.
+type EntryScan = (Vec<(EntityType, String)>, HashMap<String, Vec<PiiSpan>>);
+
 /// Recursively collect all PII spans from a JSON value tree.
 pub fn collect_pii(value: &Value, ner: &dyn Ner) -> Vec<(EntityType, String)> {
-    let mut out = Vec::new();
-    collect_pii_rec(value, ner, &mut out);
-    out
+    let (tokens, _) = scan_entry(value, ner);
+    tokens
 }
 
-fn collect_pii_rec(value: &Value, ner: &dyn Ner, out: &mut Vec<(EntityType, String)>) {
+/// Scan a JSON value tree once, building both a flat token list and a span cache.
+///
+/// The cache maps each unique string value to its NER spans, so identical
+/// strings that appear in multiple fields are only scanned once.
+fn scan_entry(value: &Value, ner: &dyn Ner) -> EntryScan {
+    let mut tokens = Vec::new();
+    let mut cache: HashMap<String, Vec<PiiSpan>> = HashMap::new();
+    scan_entry_rec(value, ner, &mut tokens, &mut cache);
+    (tokens, cache)
+}
+
+fn scan_entry_rec(
+    value: &Value,
+    ner: &dyn Ner,
+    tokens: &mut Vec<(EntityType, String)>,
+    cache: &mut HashMap<String, Vec<PiiSpan>>,
+) {
     match value {
         Value::String(s) => {
-            for span in ner.find_spans(s.as_str()) {
-                out.push((span.entity_type, span.text));
+            let spans = cache.entry(s.clone()).or_insert_with(|| ner.find_spans(s));
+            for span in spans.iter() {
+                tokens.push((span.entity_type.clone(), span.text.clone()));
             }
         }
-        Value::Array(arr) => arr.iter().for_each(|v| collect_pii_rec(v, ner, out)),
-        Value::Object(map) => map.values().for_each(|v| collect_pii_rec(v, ner, out)),
+        Value::Array(arr) => arr.iter().for_each(|v| scan_entry_rec(v, ner, tokens, cache)),
+        Value::Object(map) => map.values().for_each(|v| scan_entry_rec(v, ner, tokens, cache)),
         _ => {}
     }
 }
@@ -260,16 +284,17 @@ pub fn scrub(raw_json: &str, config: ScrubConfig) -> Result<ScrubResult> {
 
     let ner: Box<dyn Ner> = config.ner.unwrap_or_else(|| Box::new(RegexNer::default()));
 
-    // Phase 1: Parallel NER scan.
-    let per_entry_tokens: Vec<Vec<(EntityType, String)>> = entries
+    // Phase 1: Parallel NER scan — build per-entry token lists and span caches.
+    // Each unique string value within an entry is scanned exactly once.
+    let scan_results: Vec<EntryScan> = entries
         .par_iter()
-        .map(|entry| collect_pii(entry, ner.as_ref()))
+        .map(|entry| scan_entry(entry, ner.as_ref()))
         .collect();
 
     // Phase 2: Sequential alias assignment.
     let mut alias_engine = AliasEngine::new(config.alias_mode);
     let mut total_pii = 0usize;
-    for tokens in &per_entry_tokens {
+    for (tokens, _) in &scan_results {
         for (entity, token) in tokens {
             alias_engine.register(entity, token);
             total_pii += 1;
@@ -281,11 +306,12 @@ pub fn scrub(raw_json: &str, config: ScrubConfig) -> Result<ScrubResult> {
         total_pii, alias_counts
     );
 
-    // Phase 3: Parallel alias application.
+    // Phase 3: Parallel alias application using cached spans — no re-scanning.
     let results: Vec<(Value, Vec<SwapRecord>)> = entries
         .into_par_iter()
-        .map(|mut entry| {
-            let records = alias_engine.apply_to_value(&mut entry, ner.as_ref());
+        .zip(scan_results.into_par_iter())
+        .map(|(mut entry, (_, cache))| {
+            let records = alias_engine.apply_to_value(&mut entry, &cache);
             (entry, records)
         })
         .collect();
@@ -331,7 +357,7 @@ pub fn scrub(raw_json: &str, config: ScrubConfig) -> Result<ScrubResult> {
 // ── Risk score ────────────────────────────────────────────────────────────────
 
 /// Compute a 0–100 risk score based on PII density (`pii / entries × 25`).
-fn compute_risk(pii_count: usize, entry_count: usize) -> f64 {
+pub fn compute_risk(pii_count: usize, entry_count: usize) -> f64 {
     if entry_count == 0 {
         return 0.0;
     }
@@ -341,7 +367,7 @@ fn compute_risk(pii_count: usize, entry_count: usize) -> f64 {
 // ── Label helpers ─────────────────────────────────────────────────────────────
 
 /// Convert a zero-based counter to an Excel-style label: A, B, …, Z, AA, AB, …
-fn counter_to_label(n: usize) -> String {
+pub fn counter_to_label(n: usize) -> String {
     let mut n = n;
     let mut label = String::new();
     loop {

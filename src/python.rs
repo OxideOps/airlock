@@ -14,7 +14,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use crate::{compress as compress_mod, scrub as scrub_mod};
+use crate::{compress as compress_mod, ner::RegexNer, scrub as scrub_mod};
 
 // ── Python return types ───────────────────────────────────────────────────────
 
@@ -87,16 +87,52 @@ impl CompressOutput {
 /// Redact PII and compress a JSON array of log objects.
 ///
 /// Args:
-///     json_input: A JSON string (use `json.dumps(records)` to convert a list).
-///     salt:       Optional secret string for stable cross-run aliases.
-///     db_path:    Optional path to write an audit entry to the SQLite ledger.
+///     json_input:   A JSON string (use `json.dumps(records)` to convert a list).
+///     salt:         Optional secret string for stable cross-run aliases.
+///     db_path:      Optional path to write an audit entry to the SQLite ledger.
+///     names:        Detect full names. Default: True.
+///     emails:       Detect email addresses. Default: True.
+///     phones:       Detect phone numbers (NANP + E.164). Default: True.
+///     ssns:         Detect US Social Security Numbers. Default: True.
+///     credit_cards: Detect credit/debit card numbers (Luhn validated). Default: True.
+///     ip_addresses: Detect IPv4 addresses. Default: True.
+///     jwt_tokens:   Detect JWT tokens. Default: True.
+///     aws_keys:     Detect AWS access key IDs. Default: True.
+///     env_secrets:  Detect secret values in KEY=value assignments. Default: True.
 ///
 /// Returns:
 ///     ScrubOutput with `.json_str`, `.pii_count`, `.risk_score`,
 ///     `.reduction_pct`, `.swaps`, and `.ledger_id`.
 #[pyfunction]
-#[pyo3(signature = (json_input, salt=None, db_path=None))]
-fn scrub(json_input: &str, salt: Option<&str>, db_path: Option<&str>) -> PyResult<ScrubOutput> {
+#[pyo3(signature = (
+    json_input,
+    salt=None,
+    db_path=None,
+    names=true,
+    emails=true,
+    phones=true,
+    ssns=true,
+    credit_cards=true,
+    ip_addresses=true,
+    jwt_tokens=true,
+    aws_keys=true,
+    env_secrets=true,
+))]
+#[allow(clippy::too_many_arguments)]
+fn scrub(
+    json_input: &str,
+    salt: Option<&str>,
+    db_path: Option<&str>,
+    names: bool,
+    emails: bool,
+    phones: bool,
+    ssns: bool,
+    credit_cards: bool,
+    ip_addresses: bool,
+    jwt_tokens: bool,
+    aws_keys: bool,
+    env_secrets: bool,
+) -> PyResult<ScrubOutput> {
     use scrub_mod::{AliasMode, ScrubConfig};
     use std::path::PathBuf;
 
@@ -107,11 +143,24 @@ fn scrub(json_input: &str, salt: Option<&str>, db_path: Option<&str>) -> PyResul
         None => AliasMode::Sequential,
     };
 
+    let ner = RegexNer {
+        names,
+        emails,
+        phones,
+        ssns,
+        credit_cards,
+        ip_addresses,
+        jwt_tokens,
+        aws_keys,
+        env_secrets,
+        custom_rules: Vec::new(),
+    };
+
     let config = ScrubConfig {
         db_path: db_path.map(PathBuf::from),
         source_path: "<python>".to_string(),
         alias_mode,
-        ner: None,
+        ner: Some(Box::new(ner)),
     };
 
     let result = scrub_mod::scrub(json_input, config)

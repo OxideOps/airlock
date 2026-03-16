@@ -126,10 +126,11 @@ fn aws_key_regex() -> &'static Regex {
 fn env_secret_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // Matches `KEY=value` or `key: value` where the key name strongly implies a secret.
+    // Capture group 1 isolates the value so the key name is preserved in the output.
     // The value must be at least 6 non-whitespace characters to filter out placeholders.
     RE.get_or_init(|| {
         Regex::new(
-            r#"(?i)\b(?:api[_-]?key|secret(?:[_-]?key)?|private[_-]?key|password|passwd|db[_-]?pass(?:word)?|auth[_-]?token|access[_-]?token|refresh[_-]?token)\s*[=:]\s*['"]?[^\s'"]{6,}['"]?"#,
+            r#"(?i)\b(?:api[_-]?key|secret(?:[_-]?key)?|private[_-]?key|password|passwd|db[_-]?pass(?:word)?|auth[_-]?token|access[_-]?token|refresh[_-]?token)\s*[=:]\s*['"]?([^\s'"]{6,})['"]?"#,
         )
         .expect("static regex is valid")
     })
@@ -281,7 +282,26 @@ impl Ner for RegexNer {
             push_spans!(aws_key_regex, EntityType::AwsKey);
         }
         if self.env_secrets {
-            push_spans!(env_secret_regex, EntityType::EnvSecret);
+            // Use captures_iter so the span covers only the value (group 1),
+            // preserving the key name (e.g. `API_KEY=`) in the output.
+            for cap in env_secret_regex().captures_iter(text) {
+                if let Some(val) = cap.get(1) {
+                    if !overlaps_existing(&spans, val.start(), val.end()) {
+                        debug!(
+                            "NER[EnvSecret] {:?} {}..{}",
+                            val.as_str(),
+                            val.start(),
+                            val.end()
+                        );
+                        spans.push(PiiSpan {
+                            entity_type: EntityType::EnvSecret,
+                            start: val.start(),
+                            end: val.end(),
+                            text: val.as_str().to_owned(),
+                        });
+                    }
+                }
+            }
         }
 
         // Custom rules (lower priority than built-ins)

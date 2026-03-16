@@ -355,7 +355,7 @@ fn cmd_ledger(db: Option<PathBuf>, last: usize, cfg: &AirlockConfig) -> Result<(
 
 fn print_scrub_report(result: &scrub::ScrubResult, source: &str, db_path: &str) {
     let c = &result.compressed;
-    let risk_score = compute_risk_display(result.total_pii, c.entry_count);
+    let risk_score = scrub::compute_risk(result.total_pii, c.entry_count);
     let risk_label = match risk_score as u32 {
         0..=24 => "LOW",
         25..=49 => "MEDIUM",
@@ -491,19 +491,7 @@ fn nth_label(n: usize) -> String {
     if n == 0 {
         return "—".to_string();
     }
-    label_for(n.saturating_sub(1))
-}
-
-fn label_for(mut n: usize) -> String {
-    let mut s = String::new();
-    loop {
-        s.insert(0, (b'A' + (n % 26) as u8) as char);
-        if n < 26 {
-            break;
-        }
-        n = n / 26 - 1;
-    }
-    s
+    scrub::counter_to_label(n.saturating_sub(1))
 }
 
 fn trunc(s: &str, max: usize) -> String {
@@ -512,13 +500,6 @@ fn trunc(s: &str, max: usize) -> String {
     } else {
         format!("…{}", &s[s.len().saturating_sub(max - 1)..])
     }
-}
-
-fn compute_risk_display(pii: usize, entries: usize) -> f64 {
-    if entries == 0 {
-        return 0.0;
-    }
-    (pii as f64 / entries as f64 * 25.0).min(100.0)
 }
 
 fn init_tracing(verbose: u8) {
