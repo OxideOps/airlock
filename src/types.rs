@@ -54,6 +54,7 @@ impl std::fmt::Display for EntityType {
 /// A single detected PII span within a string value.
 #[derive(Debug, Clone)]
 pub struct PiiSpan {
+    /// The category of PII detected at this span.
     pub entity_type: EntityType,
     /// Inclusive start byte offset in the source string.
     pub start: usize,
@@ -77,12 +78,20 @@ pub struct SwapRecord {
 /// A single row written to the SQLite Risk Ledger for each `airlock scrub` run.
 #[derive(Debug, Clone)]
 pub struct LedgerEntry {
+    /// RFC-3339 timestamp of when the scrub ran.
     pub timestamp: String,
+    /// The file path (or `"<python>"`) passed as the data source.
     pub source_path: String,
+    /// Number of JSON/NDJSON records processed.
     pub entry_count: usize,
+    /// Total PII instances detected across all entries.
     pub pii_count: usize,
+    /// 0–100 risk density score: `(pii / entries × 25).min(100)`.
     pub risk_score: f64,
+    /// Approximate LLM token count before compression.
     pub tokens_before: usize,
+    /// Approximate LLM token count after compression.
     pub tokens_after: usize,
+    /// Percentage of tokens saved: `(before − after) / before × 100`.
     pub reduction_pct: f64,
 }
