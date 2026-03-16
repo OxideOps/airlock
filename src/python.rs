@@ -1,4 +1,7 @@
 //! Python bindings for Airlock — compiled only with `--features python`.
+// PyO3's #[pyfunction] proc macro expands code that newer clippy versions
+// incorrectly flag as a useless PyErr conversion. Suppress at file level.
+#![allow(clippy::useless_conversion)]
 //!
 //! Exposes two functions to Python:
 //!
