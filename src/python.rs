@@ -11,7 +11,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use crate::{compress, scrub as scrub_mod};
+use crate::{compress as compress_mod, scrub as scrub_mod};
 
 // ── Python return types ───────────────────────────────────────────────────────
 
@@ -150,7 +150,7 @@ fn compress(json_input: &str) -> PyResult<CompressOutput> {
     let entries = scrub_mod::parse_entries(json_input)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
-    let result = compress::compress(&entries)
+    let result = compress_mod::compress(&entries)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
     let json_str = serde_json::to_string(&result.output)

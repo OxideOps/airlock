@@ -34,7 +34,7 @@ tracing       = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow        = "1"
 toml          = "0.8"
-pyo3          = { version = "0.21", features = ["extension-module"], optional = true }
+pyo3          = { version = "0.22", optional = true }
 
 # ── Release profile ───────────────────────────────────────────────────────────
 [profile.release]

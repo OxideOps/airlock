@@ -1,0 +1,8 @@
+# Allow unresolved Python symbols when building cdylib for PyO3 on macOS.
+# Without this, the linker errors on missing libpython symbols because the
+# extension module is loaded into an already-running Python interpreter.
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
