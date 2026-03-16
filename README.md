@@ -1,14 +1,16 @@
 # Airlock
 
 [![CI](https://github.com/OxideOps/airlock/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/OxideOps/airlock/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/airlock-rs.svg)](https://crates.io/crates/airlock-rs)
+[![PyPI](https://img.shields.io/pypi/v/airlock-rs.svg)](https://pypi.org/project/airlock-rs)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 
 **Local-first AI security gateway.** Redact PII, cut LLM token costs, and maintain a full audit trail — without sending a single byte to the cloud.
 
 ```bash
-pip install airlock          # Python SDK
-cargo install airlock        # CLI
+pip install airlock-rs       # Python SDK
+cargo install airlock-rs     # CLI
 ```
 
 ---
@@ -54,7 +56,21 @@ response = openai_client.chat(messages=[{"role": "user", "content": result.json_
 
 ```python
 # Scrub PII + compress
-result = airlock.scrub(json_str, salt=None, db_path=None)
+result = airlock.scrub(
+    json_str,
+    salt=None,          # str  — secret for stable cross-run aliases
+    db_path=None,       # str  — path to SQLite audit ledger
+    # Toggle individual entity types (all True by default):
+    names=True,
+    emails=True,
+    phones=True,
+    ssns=True,
+    credit_cards=True,
+    ip_addresses=True,
+    jwt_tokens=True,
+    aws_keys=True,
+    env_secrets=True,
+)
 result.json_str       # str   — scrubbed, compressed JSON
 result.pii_count      # int   — total PII instances found
 result.risk_score     # float — 0–100 density score
@@ -111,16 +127,19 @@ airlock ledger
 
 ## What Gets Redacted
 
-| PII Type | Example Input | Alias |
-|---|---|---|
-| Full name | `Alice Johnson` | `User_A` |
-| Email | `alice@corp.com` | `alias_a@redacted.dev` |
-| Phone | `555-867-5309` | `Phone_A` |
-| SSN | `123-45-6789` | `SSN_A` |
-| Credit card | `4111 1111 1111 1111` | `Card_A` |
-| IPv4 address | `192.168.1.100` | `IP_A` |
+| PII Type | Standard | Example Input | Alias |
+|---|---|---|---|
+| Full name | — | `Alice Johnson` | `User_A` |
+| Email | RFC 5322 | `alice@corp.com` | `alias_a@redacted.dev` |
+| Phone | NANP + E.164 | `555-867-5309`, `+44 7911 123456` | `Phone_A` |
+| SSN | SSA format | `123-45-6789` | `SSN_A` |
+| Credit card | ISO/IEC 7812 (Luhn) | `4111 1111 1111 1111` | `Card_A` |
+| IPv4 address | RFC 791 | `192.168.1.100` | `IP_A` |
+| JWT token | — | `eyJhbGci...` | `Token_A` |
+| AWS access key | — | `AKIAIOSFODNN7EXAMPLE` | `AwsKey_A` |
+| Env secret | — | `API_KEY=sk-abc123` → `API_KEY=Secret_A` | `Secret_A` |
 
-Aliases are consistent within a run — `User_A` always refers to the same person, so AI models can still reason about behavior patterns without seeing real identities.
+All 9 types are enabled by default and individually toggleable. Aliases are consistent within a run — `User_A` always refers to the same person, so AI models can still reason about behavior patterns without seeing real identities.
 
 ---
 
@@ -224,21 +243,15 @@ The ledger stores counts and statistics only — never the original PII values.
 ### Python (recommended)
 
 ```bash
-pip install airlock
+pip install airlock-rs
 ```
 
 Requires Python 3.8+. Pre-built wheels for Linux, macOS, and Windows.
 
-### CLI — Homebrew
-
-```bash
-brew install OxideOps/homebrew-tap/airlock   # coming soon
-```
-
 ### CLI — Cargo
 
 ```bash
-cargo install airlock
+cargo install airlock-rs
 ```
 
 ### CLI — pre-built binary
@@ -254,7 +267,7 @@ git clone https://github.com/OxideOps/airlock
 cd airlock
 
 # Run tests
-cargo test
+cargo test --all-features
 
 # Build release binary
 cargo build --release
@@ -263,7 +276,7 @@ cargo build --release
 maturin develop --features python
 
 # Lint
-cargo clippy -- -D warnings
+cargo clippy --all-features -- -D warnings
 ```
 
 ---
@@ -275,7 +288,7 @@ src/
 ├── lib.rs       — Library entry point; Python module registration
 ├── main.rs      — CLI (clap): scrub / compress / ledger commands
 ├── types.rs     — EntityType, PiiSpan, SwapRecord, LedgerEntry
-├── ner.rs       — Ner trait + RegexNer (6 built-in patterns + custom rules)
+├── ner.rs       — Ner trait + RegexNer (9 built-in patterns + custom rules)
 ├── scrub.rs     — Pipeline: NER → alias → redact → compress → ledger
 ├── compress.rs  — Token-Tax compression (schema extraction + row compaction)
 ├── ledger.rs    — SQLite Risk Ledger (rusqlite, bundled)
