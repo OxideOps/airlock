@@ -32,17 +32,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install cross (Linux aarch64 only)
+      - name: Install cargo-zigbuild (Linux aarch64 only)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: |
+          pip install ziglang
+          cargo install cargo-zigbuild
 
       - name: Build (native)
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: cargo build --release --bin airlock --target ${{ matrix.target }}
 
-      - name: Build (cross)
+      - name: Build (zigbuild)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: cross build --release --bin airlock --target ${{ matrix.target }}
+        run: cargo zigbuild --release --bin airlock --target ${{ matrix.target }}
 
       - name: Stage artifact
         shell: bash
