@@ -35,7 +35,7 @@ fn require_file(path: &Path) -> Result<String> {
     }
 }
 
-/// Build a [`RegexNer`] from the active config's custom rules.
+/// Build a [`RegexNer`] from the active config's custom rules and redact toggles.
 fn build_ner(cfg: &AirlockConfig) -> Result<RegexNer> {
     let mut custom_rules = Vec::new();
     for rule in &cfg.rules {
@@ -47,7 +47,15 @@ fn build_ner(cfg: &AirlockConfig) -> Result<RegexNer> {
             pattern,
         });
     }
-    Ok(RegexNer { custom_rules })
+    Ok(RegexNer {
+        custom_rules,
+        names: cfg.redact.names,
+        emails: cfg.redact.emails,
+        phones: cfg.redact.phones,
+        ssns: cfg.redact.ssns,
+        credit_cards: cfg.redact.credit_cards,
+        ip_addresses: cfg.redact.ip_addresses,
+    })
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -183,7 +191,7 @@ fn run(cli: Cli) -> Result<()> {
             output,
             salt,
         } => cmd_scrub(&path, db, diff, &output, salt, cfg),
-        Commands::Compress { path, output } => cmd_compress(&path, &output, cfg),
+        Commands::Compress { path, output } => cmd_compress(&path, &output),
         Commands::Ledger { db, last } => cmd_ledger(db, last, &cfg),
     }
 }
@@ -251,7 +259,7 @@ fn cmd_scrub(
     Ok(())
 }
 
-fn cmd_compress(path: &Path, output: &str, cfg: AirlockConfig) -> Result<()> {
+fn cmd_compress(path: &Path, output: &str) -> Result<()> {
     let raw = require_file(path)?;
     debug!("Loaded {} bytes from '{}'", raw.len(), path.display());
 
@@ -284,9 +292,6 @@ fn cmd_compress(path: &Path, output: &str, cfg: AirlockConfig) -> Result<()> {
     );
     eprintln!("  ╚══════════════════════════════════════════════════════════╝");
     eprintln!();
-
-    // suppress unused warning on cfg — it exists for future redact toggle support
-    let _ = cfg;
 
     let json_out = match output {
         "compact" => serde_json::to_string(&result.output)?,

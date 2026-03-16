@@ -120,3 +120,78 @@ impl Ledger {
         Ok(rows)
     }
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_entry() -> LedgerEntry {
+        LedgerEntry {
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            source_path: "test.json".to_string(),
+            entry_count: 100,
+            pii_count: 12,
+            risk_score: 30.0,
+            tokens_before: 500,
+            tokens_after: 320,
+            reduction_pct: 36.0,
+        }
+    }
+
+    #[test]
+    fn write_and_read_back() {
+        let mut ledger = Ledger::open(Path::new(":memory:")).unwrap();
+        let id = ledger.record(&sample_entry()).unwrap();
+        assert!(id > 0);
+        let rows = ledger.recent(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        let (row_id, entry) = &rows[0];
+        assert_eq!(*row_id, id);
+        assert_eq!(entry.pii_count, 12);
+        assert_eq!(entry.source_path, "test.json");
+    }
+
+    #[test]
+    fn open_twice_is_idempotent() {
+        let mut ledger = Ledger::open(Path::new(":memory:")).unwrap();
+        ledger.record(&sample_entry()).unwrap();
+        // Opening again (simulated by re-initialising schema) must not error.
+        // In practice this tests CREATE TABLE IF NOT EXISTS.
+        ledger
+            .conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL, source_path TEXT NOT NULL,
+                entry_count INTEGER NOT NULL, pii_count INTEGER NOT NULL,
+                risk_score REAL NOT NULL, tokens_before INTEGER NOT NULL,
+                tokens_after INTEGER NOT NULL, reduction_pct REAL NOT NULL
+            );",
+            )
+            .unwrap();
+        let rows = ledger.recent(10).unwrap();
+        assert_eq!(rows.len(), 1, "existing row must survive re-init");
+    }
+
+    #[test]
+    fn recent_respects_limit() {
+        let mut ledger = Ledger::open(Path::new(":memory:")).unwrap();
+        for _ in 0..5 {
+            ledger.record(&sample_entry()).unwrap();
+        }
+        let rows = ledger.recent(3).unwrap();
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn recent_returns_newest_first() {
+        let mut ledger = Ledger::open(Path::new(":memory:")).unwrap();
+        let id1 = ledger.record(&sample_entry()).unwrap();
+        let id2 = ledger.record(&sample_entry()).unwrap();
+        let rows = ledger.recent(2).unwrap();
+        assert_eq!(rows[0].0, id2, "newest row should come first");
+        assert_eq!(rows[1].0, id1);
+    }
+}

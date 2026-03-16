@@ -123,6 +123,32 @@ mod tests {
     }
 
     #[test]
+    fn all_redact_flags_false() {
+        let src = r#"
+            [redact]
+            names        = false
+            emails       = false
+            phones       = false
+            ssns         = false
+            credit_cards = false
+            ip_addresses = false
+        "#;
+        let cfg: AirlockConfig = toml::from_str(src).unwrap();
+        assert!(!cfg.redact.names);
+        assert!(!cfg.redact.emails);
+        assert!(!cfg.redact.phones);
+        assert!(!cfg.redact.ssns);
+        assert!(!cfg.redact.credit_cards);
+        assert!(!cfg.redact.ip_addresses);
+    }
+
+    #[test]
+    fn invalid_toml_returns_error() {
+        let result = toml::from_str::<AirlockConfig>("not valid toml ][");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn parses_full_config() {
         let src = r#"
             [scrub]

@@ -38,10 +38,11 @@ fn email_regex() -> &'static Regex {
 
 fn credit_card_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // Visa (4xxx), Mastercard (5[1-5]xx), Amex (3[47]xx), Discover (6011/65xx)
+    // Visa (4xxx), Mastercard (5[1-5]xx), Discover (6011/65xx): 16-digit 4-4-4-4
+    // Amex (3[47]xx): 15-digit 4-6-5
     RE.get_or_init(|| {
         Regex::new(
-            r"\b(?:4\d{3}|5[1-5]\d{2}|3[47]\d{2}|6(?:011|5\d{2}))[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}(?:[- ]?\d{1,3})?\b",
+            r"\b(?:(?:4\d{3}|5[1-5]\d{2}|6(?:011|5\d{2}))[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}|3[47]\d{2}[- ]?\d{6}[- ]?\d{5})\b",
         )
         .expect("static regex is valid")
     })
@@ -106,6 +107,10 @@ pub struct CompiledCustomRule {
 
 /// The default regex-based named-entity recogniser.
 ///
+/// All built-in entity types are enabled by default. Set a flag to `false` to
+/// skip that detection pass entirely — useful when combined with the
+/// `[redact]` section of `.airlock.toml`.
+///
 /// # Examples
 ///
 /// ```
@@ -115,10 +120,35 @@ pub struct CompiledCustomRule {
 /// let spans = ner.find_spans("Contact alice@corp.com or call 555-867-5309");
 /// assert_eq!(spans.len(), 2);
 /// ```
-#[derive(Default)]
 pub struct RegexNer {
     /// User-defined patterns added via `.airlock.toml` `[[rules]]`.
     pub custom_rules: Vec<CompiledCustomRule>,
+    /// Detect full names (e.g. `Alice Johnson`). Default: `true`.
+    pub names: bool,
+    /// Detect email addresses. Default: `true`.
+    pub emails: bool,
+    /// Detect US phone numbers. Default: `true`.
+    pub phones: bool,
+    /// Detect Social Security Numbers. Default: `true`.
+    pub ssns: bool,
+    /// Detect credit card numbers. Default: `true`.
+    pub credit_cards: bool,
+    /// Detect IPv4 addresses. Default: `true`.
+    pub ip_addresses: bool,
+}
+
+impl Default for RegexNer {
+    fn default() -> Self {
+        Self {
+            custom_rules: Vec::new(),
+            names: true,
+            emails: true,
+            phones: true,
+            ssns: true,
+            credit_cards: true,
+            ip_addresses: true,
+        }
+    }
 }
 
 impl Ner for RegexNer {
@@ -148,11 +178,21 @@ impl Ner for RegexNer {
         }
 
         // Priority order — each step skips ranges claimed by earlier passes.
-        push_spans!(email_regex, EntityType::Email);
-        push_spans!(credit_card_regex, EntityType::CreditCard);
-        push_spans!(ssn_regex, EntityType::Ssn);
-        push_spans!(phone_regex, EntityType::Phone);
-        push_spans!(ipv4_regex, EntityType::IpAddress);
+        if self.emails {
+            push_spans!(email_regex, EntityType::Email);
+        }
+        if self.credit_cards {
+            push_spans!(credit_card_regex, EntityType::CreditCard);
+        }
+        if self.ssns {
+            push_spans!(ssn_regex, EntityType::Ssn);
+        }
+        if self.phones {
+            push_spans!(phone_regex, EntityType::Phone);
+        }
+        if self.ip_addresses {
+            push_spans!(ipv4_regex, EntityType::IpAddress);
+        }
 
         // Custom rules (lower priority than built-ins)
         for rule in &self.custom_rules {
@@ -180,7 +220,9 @@ impl Ner for RegexNer {
         }
 
         // Names last — most likely to false-positive inside other token types
-        push_spans!(name_regex, EntityType::Name);
+        if self.names {
+            push_spans!(name_regex, EntityType::Name);
+        }
 
         spans.sort_unstable_by_key(|s| s.start);
         spans
@@ -306,6 +348,7 @@ mod tests {
         };
         let ner = RegexNer {
             custom_rules: vec![rule],
+            ..RegexNer::default()
         };
         let spans = ner.find_spans("Employee EMP-00042 logged in");
         assert_eq!(spans.len(), 1);
@@ -313,6 +356,119 @@ mod tests {
             EntityType::Custom { name, .. } => assert_eq!(name, "EmployeeId"),
             _ => panic!("expected Custom entity type"),
         }
+    }
+
+    #[test]
+    fn detects_credit_card_with_dashes() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Card: 4111-1111-1111-1111");
+        assert!(spans
+            .iter()
+            .any(|s| s.entity_type == EntityType::CreditCard));
+    }
+
+    #[test]
+    fn detects_mastercard() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Paid with 5111 1111 1111 1118");
+        assert!(spans
+            .iter()
+            .any(|s| s.entity_type == EntityType::CreditCard));
+    }
+
+    #[test]
+    fn detects_amex() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Amex: 3714 496353 98431");
+        assert!(spans
+            .iter()
+            .any(|s| s.entity_type == EntityType::CreditCard));
+    }
+
+    #[test]
+    fn detects_phone_with_parens() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Call (555) 867-5309 now");
+        assert!(spans.iter().any(|s| s.entity_type == EntityType::Phone));
+    }
+
+    #[test]
+    fn detects_phone_with_country_code() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Reach me at +1 555-867-5309");
+        assert!(spans.iter().any(|s| s.entity_type == EntityType::Phone));
+    }
+
+    #[test]
+    fn each_redact_toggle_suppresses_only_its_type() {
+        let text =
+            "Alice Johnson alice@corp.com 555-867-5309 123-45-6789 4111 1111 1111 1111 192.168.1.1";
+        let types = [
+            (
+                EntityType::Name,
+                RegexNer {
+                    names: false,
+                    ..RegexNer::default()
+                },
+            ),
+            (
+                EntityType::Email,
+                RegexNer {
+                    emails: false,
+                    ..RegexNer::default()
+                },
+            ),
+            (
+                EntityType::Phone,
+                RegexNer {
+                    phones: false,
+                    ..RegexNer::default()
+                },
+            ),
+            (
+                EntityType::Ssn,
+                RegexNer {
+                    ssns: false,
+                    ..RegexNer::default()
+                },
+            ),
+            (
+                EntityType::CreditCard,
+                RegexNer {
+                    credit_cards: false,
+                    ..RegexNer::default()
+                },
+            ),
+            (
+                EntityType::IpAddress,
+                RegexNer {
+                    ip_addresses: false,
+                    ..RegexNer::default()
+                },
+            ),
+        ];
+        for (suppressed, ner) in &types {
+            let spans = ner.find_spans(text);
+            assert!(
+                spans.iter().all(|s| &s.entity_type != suppressed),
+                "{suppressed:?} should be suppressed but was detected"
+            );
+        }
+    }
+
+    #[test]
+    fn redact_toggles_suppress_detection() {
+        let ner = RegexNer {
+            ip_addresses: false,
+            emails: false,
+            ..RegexNer::default()
+        };
+        // Neither email nor IP should be detected
+        let spans = ner.find_spans("Alice Johnson logged in from 192.168.1.1 via alice@corp.com");
+        assert!(spans.iter().all(|s| s.entity_type != EntityType::Email));
+        assert!(spans.iter().all(|s| s.entity_type != EntityType::IpAddress));
+        // Names should still be detected
+        assert!(spans.iter().any(|s| s.entity_type == EntityType::Name));
     }
 
     #[test]

@@ -458,6 +458,60 @@ mod tests {
     }
 
     #[test]
+    fn scrub_replaces_pii_in_output_json() {
+        let input = r#"[{"user": "Alice Johnson", "email": "alice@corp.com", "action": "login"}]"#;
+        let config = ScrubConfig {
+            db_path: None,
+            source_path: "test".to_string(),
+            alias_mode: AliasMode::Sequential,
+            ner: None,
+        };
+        let result = scrub(input, config).unwrap();
+        let out = serde_json::to_string(&result.compressed.output).unwrap();
+        assert!(
+            !out.contains("Alice Johnson"),
+            "real name should be scrubbed"
+        );
+        assert!(
+            !out.contains("alice@corp.com"),
+            "real email should be scrubbed"
+        );
+        assert!(result.total_pii >= 2);
+    }
+
+    #[test]
+    fn scrub_seeded_mode_produces_stable_output() {
+        let input = r#"[{"user": "Alice Johnson", "ip": "192.168.1.1"}]"#;
+        let make_config = || ScrubConfig {
+            db_path: None,
+            source_path: "test".to_string(),
+            alias_mode: AliasMode::Seeded {
+                salt: "stable-salt".to_string(),
+            },
+            ner: None,
+        };
+        let r1 = scrub(input, make_config()).unwrap();
+        let r2 = scrub(input, make_config()).unwrap();
+        let out1 = serde_json::to_string(&r1.compressed.output).unwrap();
+        let out2 = serde_json::to_string(&r2.compressed.output).unwrap();
+        assert_eq!(out1, out2, "seeded output must be identical across runs");
+    }
+
+    #[test]
+    fn scrub_handles_ndjson_input() {
+        let input = "{\"user\": \"Bob Smith\"}\n{\"user\": \"Alice Johnson\"}\n";
+        let config = ScrubConfig {
+            db_path: None,
+            source_path: "test".to_string(),
+            alias_mode: AliasMode::Sequential,
+            ner: None,
+        };
+        let result = scrub(input, config).unwrap();
+        assert_eq!(result.compressed.entry_count, 2);
+        assert!(result.total_pii >= 2);
+    }
+
+    #[test]
     fn scrub_without_db_returns_none_ledger_id() {
         let config = ScrubConfig {
             db_path: None,

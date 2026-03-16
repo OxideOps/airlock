@@ -209,4 +209,30 @@ mod tests {
         assert_eq!(r.entry_count, 0);
         assert_eq!(r.reduction_pct, 0.0);
     }
+
+    #[test]
+    fn single_entry_does_not_panic() {
+        let entries = vec![json!({"user": "Alice", "action": "login"})];
+        let r = compress(&entries).unwrap();
+        assert_eq!(r.entry_count, 1);
+        assert_eq!(r.schema.len(), 2);
+        // reduction_pct may be 0 or negative (clamped to 0) for a single entry
+        assert!(r.reduction_pct >= 0.0);
+    }
+
+    #[test]
+    fn inconsistent_keys_across_entries() {
+        // Entry 0 has "a", entry 1 has "b" — schema should union both
+        let entries = vec![
+            json!({"a": 1, "b": 2}),
+            json!({"b": 3, "c": 4}),
+            json!({"a": 5, "c": 6}),
+        ];
+        let r = compress(&entries).unwrap();
+        assert_eq!(r.schema.len(), 3); // a, b, c
+        let rows = r.output["__airlock_rows"].as_array().unwrap();
+        // row 2 has "a" and "c" but no "b" → b position should be null
+        let b_idx = r.schema.iter().position(|k| k == "b").unwrap();
+        assert_eq!(rows[2][b_idx], Value::Null);
+    }
 }
