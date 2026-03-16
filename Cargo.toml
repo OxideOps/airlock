@@ -1,5 +1,5 @@
 [package]
-name = "airlock"
+name = "airlock-rs"
 version = "0.3.0"
 edition = "2021"
 description = "Local-first AI security gateway: PII redaction, token compression, and audit ledger"

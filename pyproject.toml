@@ -3,7 +3,7 @@ requires = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "airlock"
+name = "airlock-rs"
 version = "0.3.0"
 description = "Local-first AI security gateway: PII redaction, token compression, and audit ledger"
 readme = "README.md"

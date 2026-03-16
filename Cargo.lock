@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "airlock"
+name = "airlock-rs"
 version = "0.3.0"
 dependencies = [
  "anyhow",

@@ -224,8 +224,12 @@ fn scan_entry_rec(
                 tokens.push((span.entity_type.clone(), span.text.clone()));
             }
         }
-        Value::Array(arr) => arr.iter().for_each(|v| scan_entry_rec(v, ner, tokens, cache)),
-        Value::Object(map) => map.values().for_each(|v| scan_entry_rec(v, ner, tokens, cache)),
+        Value::Array(arr) => arr
+            .iter()
+            .for_each(|v| scan_entry_rec(v, ner, tokens, cache)),
+        Value::Object(map) => map
+            .values()
+            .for_each(|v| scan_entry_rec(v, ner, tokens, cache)),
         _ => {}
     }
 }
