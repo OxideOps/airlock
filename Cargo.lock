@@ -30,6 +30,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "luhn",
  "pyo3",
  "rand",
  "rand_chacha",
@@ -272,6 +273,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "digits_iterator"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af83450b771231745d43edf36dc9b7813ab83be5e8cbea344ccced1a09dfebcd"
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -445,6 +452,15 @@ name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
+
+[[package]]
+name = "luhn"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d10b831402a3b10e018c8bc7f0ec3344a67d0725919cbaf393accb9baf8700b"
+dependencies = [
+ "digits_iterator",
+]
 
 [[package]]
 name = "matchers"

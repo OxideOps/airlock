@@ -1,10 +1,21 @@
 //! # Named Entity Recognition (NER)
 //!
-//! Detects PII spans within plain-text strings using compiled regex patterns.
+//! Detects PII spans within plain-text strings using compiled regex patterns
+//! with post-match validation where standards apply.
 //!
 //! The public [`Ner`] trait is deliberately thin so that a real ML-backed
 //! recogniser (e.g. a local ONNX model) can be swapped in without touching
 //! any caller.
+//!
+//! ## Standards Compliance
+//!
+//! | Type       | Standard          | Notes                                          |
+//! |------------|-------------------|------------------------------------------------|
+//! | Email      | RFC 5322 (subset) | Handles 99%+ of real addresses; skips quoted locals |
+//! | CreditCard | ISO/IEC 7812      | Luhn checksum validated after regex match      |
+//! | SSN        | SSA format        | Filters invalid area numbers (000, 666, 900+)  |
+//! | Phone      | NANP + E.164      | US/CA formats and international compact/formatted |
+//! | IPv4       | RFC 791           | Octet range 0–255 validated in regex           |
 //!
 //! ## Detection Priority
 //!
@@ -14,10 +25,11 @@
 //! 1. Email — prevents name false-positives inside email addresses
 //! 2. CreditCard — before SSN to avoid partial 9-digit matches
 //! 3. SSN — specific dash-separated format
-//! 4. Phone — flexible US format
-//! 5. IpAddress — dotted-quad notation
-//! 6. Custom rules — user-defined patterns from `.airlock.toml`
-//! 7. Name — last, as it is most prone to false positives
+//! 4. Phone (NANP) — US/Canada formats
+//! 5. Phone (international) — E.164 compact and formatted
+//! 6. IpAddress — dotted-quad notation
+//! 7. Custom rules — user-defined patterns from `.airlock.toml`
+//! 8. Name — last, as it is most prone to false positives
 
 use std::sync::OnceLock;
 
@@ -50,18 +62,31 @@ fn credit_card_regex() -> &'static Regex {
 
 fn ssn_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // NNN-NN-NNNN format. The regex crate does not support lookahead, so we
-    // match the common format and accept rare false positives (e.g. phone ext).
+    // NNN-NN-NNNN format. Invalid area numbers (000, 666, 900-999) are filtered
+    // by ssn_valid() after the match since the regex crate lacks lookahead.
     RE.get_or_init(|| Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").expect("static regex is valid"))
 }
 
 fn phone_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // Common US formats: (555) 867-5309, 555-867-5309, +1 555.867.5309
+    // NANP: (555) 867-5309, 555-867-5309, +1 555.867.5309
     // Area code starts 2-9 to reduce false positives in version numbers etc.
     RE.get_or_init(|| {
         Regex::new(r"\b(?:\+?1[\s.\-]?)?\(?[2-9]\d{2}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b")
             .expect("static regex is valid")
+    })
+}
+
+fn international_phone_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // E.164 compact:    +447911123456, +14155551234
+    // E.164 formatted:  +44 7911 123456, +49 30 12345678, +1 415 555 1234
+    // Country code 1–4 digits; total 10–15 digits per E.164 standard.
+    RE.get_or_init(|| {
+        Regex::new(
+            r"\+[1-9]\d{9,13}\b|\+[1-9]\d{0,3}[\s.\-]\d{2,9}(?:[\s.\-]\d{2,9}){0,4}\b",
+        )
+        .expect("static regex is valid")
     })
 }
 
@@ -82,6 +107,53 @@ fn name_regex() -> &'static Regex {
     RE.get_or_init(|| {
         Regex::new(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b").expect("static regex is valid")
     })
+}
+
+fn jwt_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // Three base64url segments separated by dots: header.payload.signature
+    // Header and payload both decode to JSON, so they start with `eyJ` (base64 of `{"`).
+    RE.get_or_init(|| {
+        Regex::new(r"\beyJ[A-Za-z0-9_\-]{2,}\.eyJ[A-Za-z0-9_\-]{2,}\.[A-Za-z0-9_\-]{2,}\b")
+            .expect("static regex is valid")
+    })
+}
+
+fn aws_key_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // AWS access key IDs begin with AKIA followed by 16 uppercase alphanumerics.
+    RE.get_or_init(|| {
+        Regex::new(r"\bAKIA[0-9A-Z]{16}\b").expect("static regex is valid")
+    })
+}
+
+fn env_secret_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // Matches `KEY=value` or `key: value` where the key name strongly implies a secret.
+    // The value must be at least 6 non-whitespace characters to filter out placeholders.
+    RE.get_or_init(|| {
+        Regex::new(
+            r#"(?i)\b(?:api[_-]?key|secret(?:[_-]?key)?|private[_-]?key|password|passwd|db[_-]?pass(?:word)?|auth[_-]?token|access[_-]?token|refresh[_-]?token)\s*[=:]\s*['"]?[^\s'"]{6,}['"]?"#,
+        )
+        .expect("static regex is valid")
+    })
+}
+
+// ── Post-match validators ─────────────────────────────────────────────────────
+
+/// Validate a credit card number using the Luhn algorithm (ISO/IEC 7812).
+///
+/// Delegates to the [`luhn`] crate, which strips spaces and dashes automatically.
+fn luhn_valid(s: &str) -> bool {
+    luhn::valid(s)
+}
+
+/// Validate an SSN area number — rejects 000, 666, and 900-999.
+///
+/// The regex crate lacks lookahead, so this runs as a post-match filter.
+fn ssn_valid(s: &str) -> bool {
+    let area: u32 = s[..3].parse().unwrap_or(0);
+    area != 0 && area != 666 && area < 900
 }
 
 // ── Trait ─────────────────────────────────────────────────────────────────────
@@ -135,6 +207,12 @@ pub struct RegexNer {
     pub credit_cards: bool,
     /// Detect IPv4 addresses. Default: `true`.
     pub ip_addresses: bool,
+    /// Detect JWT tokens (three-part base64url). Default: `true`.
+    pub jwt_tokens: bool,
+    /// Detect AWS access key IDs (`AKIA…`). Default: `true`.
+    pub aws_keys: bool,
+    /// Detect secret values in `KEY=value` / `key: value` assignments. Default: `true`.
+    pub env_secrets: bool,
 }
 
 impl Default for RegexNer {
@@ -147,6 +225,9 @@ impl Default for RegexNer {
             ssns: true,
             credit_cards: true,
             ip_addresses: true,
+            jwt_tokens: true,
+            aws_keys: true,
+            env_secrets: true,
         }
     }
 }
@@ -157,8 +238,11 @@ impl Ner for RegexNer {
 
         macro_rules! push_spans {
             ($regex:expr, $etype:expr) => {
+                push_spans!($regex, $etype, |_: &str| true)
+            };
+            ($regex:expr, $etype:expr, $validate:expr) => {
                 for m in $regex().find_iter(text) {
-                    if !overlaps_existing(&spans, m.start(), m.end()) {
+                    if !overlaps_existing(&spans, m.start(), m.end()) && $validate(m.as_str()) {
                         debug!(
                             "NER[{}] {:?} {}..{}",
                             $etype,
@@ -182,16 +266,26 @@ impl Ner for RegexNer {
             push_spans!(email_regex, EntityType::Email);
         }
         if self.credit_cards {
-            push_spans!(credit_card_regex, EntityType::CreditCard);
+            push_spans!(credit_card_regex, EntityType::CreditCard, luhn_valid);
         }
         if self.ssns {
-            push_spans!(ssn_regex, EntityType::Ssn);
+            push_spans!(ssn_regex, EntityType::Ssn, ssn_valid);
         }
         if self.phones {
             push_spans!(phone_regex, EntityType::Phone);
+            push_spans!(international_phone_regex, EntityType::Phone);
         }
         if self.ip_addresses {
             push_spans!(ipv4_regex, EntityType::IpAddress);
+        }
+        if self.jwt_tokens {
+            push_spans!(jwt_regex, EntityType::JwtToken);
+        }
+        if self.aws_keys {
+            push_spans!(aws_key_regex, EntityType::AwsKey);
+        }
+        if self.env_secrets {
+            push_spans!(env_secret_regex, EntityType::EnvSecret);
         }
 
         // Custom rules (lower priority than built-ins)
@@ -469,6 +563,102 @@ mod tests {
         assert!(spans.iter().all(|s| s.entity_type != EntityType::IpAddress));
         // Names should still be detected
         assert!(spans.iter().any(|s| s.entity_type == EntityType::Name));
+    }
+
+    #[test]
+    fn luhn_rejects_invalid_card_number() {
+        // 4111 1111 1111 1112 — last digit changed, Luhn fails
+        assert!(!luhn_valid("4111111111111112"));
+        assert!(!luhn_valid("1234567890123456"));
+    }
+
+    #[test]
+    fn luhn_accepts_valid_card_numbers() {
+        assert!(luhn_valid("4111111111111111")); // Visa test card
+        assert!(luhn_valid("5500005555555559")); // Mastercard test card
+        assert!(luhn_valid("371449635398431"));  // Amex test card
+    }
+
+    #[test]
+    fn invalid_card_shape_not_detected() {
+        let ner = RegexNer::default();
+        // Matches card pattern but fails Luhn
+        let spans = ner.find_spans("4111 1111 1111 1112");
+        assert!(spans.iter().all(|s| s.entity_type != EntityType::CreditCard));
+    }
+
+    #[test]
+    fn ssn_rejects_invalid_area_numbers() {
+        assert!(!ssn_valid("000-12-3456")); // area 000
+        assert!(!ssn_valid("666-12-3456")); // area 666
+        assert!(!ssn_valid("900-12-3456")); // area 900+
+        assert!(!ssn_valid("999-12-3456")); // area 999
+    }
+
+    #[test]
+    fn ssn_accepts_valid_area_numbers() {
+        assert!(ssn_valid("123-45-6789"));
+        assert!(ssn_valid("001-01-0001")); // area 001 is valid
+    }
+
+    #[test]
+    fn invalid_ssn_area_not_detected() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("SSN: 000-12-3456");
+        assert!(spans.iter().all(|s| s.entity_type != EntityType::Ssn));
+        let spans = ner.find_spans("SSN: 666-12-3456");
+        assert!(spans.iter().all(|s| s.entity_type != EntityType::Ssn));
+    }
+
+    #[test]
+    fn detects_international_phone_compact_e164() {
+        let ner = RegexNer::default();
+        assert!(ner.find_spans("Call +447911123456 now").iter().any(|s| s.entity_type == EntityType::Phone));
+        assert!(ner.find_spans("Reach +14155551234 here").iter().any(|s| s.entity_type == EntityType::Phone));
+    }
+
+    #[test]
+    fn detects_international_phone_formatted() {
+        let ner = RegexNer::default();
+        assert!(ner.find_spans("+44 7911 123456").iter().any(|s| s.entity_type == EntityType::Phone));
+        assert!(ner.find_spans("+49 30 12345678").iter().any(|s| s.entity_type == EntityType::Phone));
+    }
+
+    #[test]
+    fn detects_jwt_token() {
+        let ner = RegexNer::default();
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+        let spans = ner.find_spans(&format!("Authorization: Bearer {jwt}"));
+        assert!(spans.iter().any(|s| s.entity_type == EntityType::JwtToken));
+    }
+
+    #[test]
+    fn detects_aws_access_key() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Using key AKIAIOSFODNN7EXAMPLE for request");
+        assert!(spans.iter().any(|s| s.entity_type == EntityType::AwsKey));
+    }
+
+    #[test]
+    fn detects_env_secret_equals() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("API_KEY=sk-abc123def456");
+        assert!(spans.iter().any(|s| s.entity_type == EntityType::EnvSecret));
+    }
+
+    #[test]
+    fn detects_env_secret_colon() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("password: supersecretvalue");
+        assert!(spans.iter().any(|s| s.entity_type == EntityType::EnvSecret));
+    }
+
+    #[test]
+    fn env_secret_ignores_short_values() {
+        let ner = RegexNer::default();
+        // Value "abc" is only 3 chars — below the 6-char minimum
+        let spans = ner.find_spans("password=abc");
+        assert!(spans.iter().all(|s| s.entity_type != EntityType::EnvSecret));
     }
 
     #[test]

@@ -35,6 +35,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow        = "1"
 toml          = "0.8"
 pyo3          = { version = "0.22", optional = true }
+luhn = "1.0.1"
 
 # ── Release profile ───────────────────────────────────────────────────────────
 [profile.release]

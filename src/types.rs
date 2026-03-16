@@ -7,14 +7,20 @@ pub enum EntityType {
     Name,
     /// An RFC-5322-style email address.
     Email,
-    /// A US phone number in any common format.
+    /// A US phone number in any common format, or an E.164 international number.
     Phone,
     /// A US Social Security Number (NNN-NN-NNNN).
     Ssn,
-    /// A credit/debit card number (Visa, MC, Amex, Discover).
+    /// A credit/debit card number (Visa, MC, Amex, Discover) — Luhn validated.
     CreditCard,
     /// An IPv4 address in dotted-quad notation.
     IpAddress,
+    /// A JWT (JSON Web Token) in its signed three-part `header.payload.signature` form.
+    JwtToken,
+    /// An AWS access key ID (begins with `AKIA`).
+    AwsKey,
+    /// A secret value assigned to a sensitive key name (e.g. `API_KEY=…`, `password: …`).
+    EnvSecret,
     /// A user-defined entity from `.airlock.toml` custom rules.
     Custom { name: String, alias_prefix: String },
 }
@@ -32,6 +38,9 @@ impl EntityType {
             EntityType::Ssn => "SSN",
             EntityType::CreditCard => "Card",
             EntityType::IpAddress => "IP",
+            EntityType::JwtToken => "Token",
+            EntityType::AwsKey => "AwsKey",
+            EntityType::EnvSecret => "Secret",
             EntityType::Custom { alias_prefix, .. } => alias_prefix.as_str(),
         }
     }
@@ -46,6 +55,9 @@ impl std::fmt::Display for EntityType {
             EntityType::Ssn => write!(f, "SSN"),
             EntityType::CreditCard => write!(f, "CreditCard"),
             EntityType::IpAddress => write!(f, "IpAddress"),
+            EntityType::JwtToken => write!(f, "JwtToken"),
+            EntityType::AwsKey => write!(f, "AwsKey"),
+            EntityType::EnvSecret => write!(f, "EnvSecret"),
             EntityType::Custom { name, .. } => write!(f, "{name}"),
         }
     }

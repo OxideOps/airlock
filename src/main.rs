@@ -55,6 +55,9 @@ fn build_ner(cfg: &AirlockConfig) -> Result<RegexNer> {
         ssns: cfg.redact.ssns,
         credit_cards: cfg.redact.credit_cards,
         ip_addresses: cfg.redact.ip_addresses,
+        jwt_tokens: cfg.redact.jwt_tokens,
+        aws_keys: cfg.redact.aws_keys,
+        env_secrets: cfg.redact.env_secrets,
     })
 }
 
@@ -420,6 +423,9 @@ fn format_pii_breakdown(counts: &HashMap<EntityType, usize>) -> String {
         EntityType::Ssn,
         EntityType::CreditCard,
         EntityType::IpAddress,
+        EntityType::JwtToken,
+        EntityType::AwsKey,
+        EntityType::EnvSecret,
     ];
     let mut parts: Vec<String> = ordered
         .iter()

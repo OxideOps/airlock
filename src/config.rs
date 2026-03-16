@@ -59,6 +59,12 @@ pub struct RedactSection {
     pub credit_cards: bool,
     #[serde(default = "default_true")]
     pub ip_addresses: bool,
+    #[serde(default = "default_true")]
+    pub jwt_tokens: bool,
+    #[serde(default = "default_true")]
+    pub aws_keys: bool,
+    #[serde(default = "default_true")]
+    pub env_secrets: bool,
 }
 
 impl Default for RedactSection {
@@ -70,6 +76,9 @@ impl Default for RedactSection {
             ssns: true,
             credit_cards: true,
             ip_addresses: true,
+            jwt_tokens: true,
+            aws_keys: true,
+            env_secrets: true,
         }
     }
 }
