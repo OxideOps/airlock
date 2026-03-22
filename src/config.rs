@@ -33,6 +33,37 @@ pub struct AirlockConfig {
 
     #[serde(default)]
     pub rules: Vec<CustomRuleConfig>,
+
+    #[serde(default)]
+    pub server: ServerSection,
+}
+
+/// `[server]` section — HTTP server settings for `airlock serve`.
+#[derive(Debug, Deserialize)]
+pub struct ServerSection {
+    /// Interface to bind on.
+    #[serde(default = "default_host")]
+    pub host: String,
+    /// TCP port to listen on.
+    #[serde(default = "default_port")]
+    pub port: u16,
+}
+
+impl Default for ServerSection {
+    fn default() -> Self {
+        Self {
+            host: default_host(),
+            port: default_port(),
+        }
+    }
+}
+
+fn default_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_port() -> u16 {
+    7777
 }
 
 /// `[scrub]` section — default session settings.

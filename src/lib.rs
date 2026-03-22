@@ -33,6 +33,7 @@ pub mod config;
 pub mod ledger;
 pub mod ner;
 pub mod scrub;
+pub mod server;
 pub mod types;
 
 // Python extension module — only compiled with `--features python`

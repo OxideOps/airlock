@@ -86,6 +86,38 @@ impl Ledger {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Fetch a single session record by its primary-key `id`.
+    ///
+    /// Returns `Ok(None)` if no row with that `id` exists.
+    pub fn get_by_id(&self, id: i64) -> Result<Option<(i64, LedgerEntry)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, timestamp, source_path, entry_count, pii_count,
+                    risk_score, tokens_before, tokens_after, reduction_pct
+             FROM sessions WHERE id = ?1",
+        )?;
+
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                LedgerEntry {
+                    timestamp:     row.get(1)?,
+                    source_path:   row.get(2)?,
+                    entry_count:   row.get::<_, i64>(3)? as usize,
+                    pii_count:     row.get::<_, i64>(4)? as usize,
+                    risk_score:    row.get(5)?,
+                    tokens_before: row.get::<_, i64>(6)? as usize,
+                    tokens_after:  row.get::<_, i64>(7)? as usize,
+                    reduction_pct: row.get(8)?,
+                },
+            ))
+        })?;
+
+        match rows.next() {
+            Some(row) => Ok(Some(row.context("Failed to read ledger row by id")?)),
+            None => Ok(None),
+        }
+    }
+
     /// Read the `n` most recent session records, newest first.
     ///
     /// # Errors

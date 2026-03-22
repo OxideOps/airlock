@@ -170,6 +170,25 @@ enum Commands {
         #[arg(short, long, default_value = "10", value_name = "N")]
         last: usize,
     },
+
+    /// Start the Airlock HTTP API server.
+    ///
+    /// Exposes POST /redact, POST /restore, and GET /audit over a local HTTP
+    /// interface. All endpoints run the same pipeline as the CLI commands.
+    ///
+    /// EXAMPLES
+    ///   airlock serve
+    ///   airlock serve --port 8080
+    ///   airlock serve --host 0.0.0.0 --port 9000
+    Serve {
+        /// TCP port to listen on [default: from config or 7777]
+        #[arg(short, long, value_name = "PORT")]
+        port: Option<u16>,
+
+        /// Interface to bind on [default: from config or 127.0.0.1]
+        #[arg(long, value_name = "HOST")]
+        host: Option<String>,
+    },
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -196,6 +215,7 @@ fn run(cli: Cli) -> Result<()> {
         } => cmd_scrub(&path, db, diff, &output, salt, cfg),
         Commands::Compress { path, output } => cmd_compress(&path, &output),
         Commands::Ledger { db, last } => cmd_ledger(db, last, &cfg),
+        Commands::Serve { port, host } => cmd_serve(host, port, cfg),
     }
 }
 
@@ -349,6 +369,11 @@ fn cmd_ledger(db: Option<PathBuf>, last: usize, cfg: &AirlockConfig) -> Result<(
     eprintln!("  ╚══════╩════════════════════╩══════════╩═════════╩══════════╩══════════════════╝");
     eprintln!();
     Ok(())
+}
+
+fn cmd_serve(host: Option<String>, port: Option<u16>, cfg: airlock::config::AirlockConfig) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(airlock::server::serve(cfg, host, port))
 }
 
 // ── Scrub report banner ───────────────────────────────────────────────────────
