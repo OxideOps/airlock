@@ -28,9 +28,27 @@
 //! 4. Phone (NANP) — US/Canada formats
 //! 5. Phone (international) — E.164 compact and formatted
 //! 6. IpAddress — dotted-quad notation
-//! 7. Custom rules — user-defined patterns from `.airlock.toml`
-//! 8. Name — last, as it is most prone to false positives
+//! 7. JwtToken — three-part base64url form
+//! 8. AwsKey — AKIA-prefixed access key IDs
+//! 9. EnvSecret — `KEY=value` / `key: value` secret assignments
+//! 10. Custom rules — user-defined patterns from `.airlock.toml`
+//! 11. Name — last; uses three strategies with a bundled name dictionary
+//!
+//! ## Name Detection Strategy
+//!
+//! Names are detected by three complementary strategies (see `detect_names`):
+//!
+//! | Strategy | Signal | Example | Dictionary check? |
+//! |----------|--------|---------|-------------------|
+//! | Title-triggered | Honorific prefix | `Dr. Alice Johnson` | No — title is sufficient |
+//! | Label-triggered | Field label | `name: Bob Smith` | No — label is sufficient |
+//! | Verb-triggered | Attribution verb | `named Emily Davis` | First word must be a known name |
+//! | Dictionary | First+last name lists | `Robert Brown` | Yes — full match required |
+//!
+//! False positives on geographic sequences (`Victoria Park`), company names
+//! (`General Electric`), and calendar words are suppressed by `is_non_person_word`.
 
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -99,12 +117,350 @@ fn ipv4_regex() -> &'static Regex {
     })
 }
 
-fn name_regex() -> &'static Regex {
+// ── Name detection infrastructure ────────────────────────────────────────────
+//
+// Name detection uses three complementary strategies, applied in order:
+//
+//   1. Title-triggered  — "Mr. Smith", "Dr. Alice Johnson"
+//      Any capitalised word(s) immediately following an honorific.
+//      No dictionary check required — the title is an unambiguous signal.
+//
+//   2. Label/verb-triggered — "name: Bob Martinez", "named Emily Davis"
+//      A field label or attribution verb followed by capitalised word(s).
+//      Verb context ("named", "called") requires the first captured word to
+//      be in the name dictionary to guard against "called Google Home" etc.
+//
+//   3. Dictionary-based   — "Robert Brown", "Alice Chen"
+//      Two or more consecutive capitalised words scored against bundled
+//      first-name and last-name lists.  Three confidence tiers:
+//
+//        High   first word ∈ first_names  AND  last word ∈ last_names
+//        Medium first word ∈ first_names  AND  second word ∉ non_person_words
+//               (two-word sequences only)
+//        Long   first word ∈ first_names  AND  sequence is 3+ words
+//               (longer sequences are extremely rarely non-names)
+//
+// Words that are non-person second words (geographic, org, calendar) are
+// tracked in `is_non_person_word` to suppress false positives like
+// "Victoria Park" or "Alice January".
+
+// ── Name dictionaries ─────────────────────────────────────────────────────────
+
+/// Common given names (lowercase). Covers top ~250 US male + female names.
+const FIRST_NAMES: &[&str] = &[
+    // Male — full forms
+    "james","john","robert","michael","william","david","richard","joseph",
+    "thomas","charles","christopher","daniel","matthew","anthony","mark",
+    "donald","steven","paul","andrew","kenneth","george","joshua","kevin",
+    "brian","edward","ronald","timothy","jason","jeffrey","ryan","jacob",
+    "gary","nicholas","eric","stephen","jonathan","larry","justin","scott",
+    "brandon","frank","benjamin","gregory","samuel","raymond","patrick",
+    "alexander","jack","dennis","jerry","tyler","aaron","henry","adam",
+    "douglas","nathan","peter","zachary","kyle","walter","harold","jeremy",
+    "ethan","carl","keith","roger","gerald","christian","terry","sean",
+    "austin","arthur","noah","lawrence","jesse","joe","bryan","billy",
+    "jordan","albert","dylan","bruce","gabriel","alan","juan","logan",
+    "wayne","ralph","roy","eugene","randy","vincent","russell","elijah",
+    "louis","philip","bobby","bradley","liam","oliver","lucas","mason",
+    "leo","hunter","carter","eli","owen","caleb","ian","luke","evan",
+    "max","simon","marcus","reginald","leonard","barry","travis","chad",
+    "dean","derek","cody","brent","marvin","ted","warren","floyd",
+    "clarence","clifford","fredrick","gilbert","jerome","leroy","melvin",
+    "roland","ronnie","virgil","alvin","wendell","kirk","lance","emmett",
+    "salvador","sergio","mario","miguel","carlos","luis","pedro","jorge",
+    "manuel","antonio","francisco","jose","roberto","alejandro","hector",
+    // Male — common nicknames (often appear without the full given name)
+    "bob","mike","tom","bill","jim","dave","sam","ben","rob","dan","tim",
+    "ron","don","ken","chris","tony","pat","nick","matt","steve","andy",
+    "pete","rick","chuck","hank","theo","jake","zach","brad","drew","fred",
+    "hal","herb","jed","lenny","mick","ned","norm","phil","rich","russ",
+    "sid","stan","stu","vince","walt","wes","zak",
+    // Female
+    "mary","patricia","jennifer","linda","barbara","elizabeth","susan",
+    "jessica","sarah","karen","lisa","nancy","betty","margaret","sandra",
+    "ashley","dorothy","kimberly","emily","donna","michelle","carol",
+    "amanda","melissa","deborah","stephanie","rebecca","sharon","laura",
+    "cynthia","kathleen","amy","angela","shirley","anna","brenda","pamela",
+    "emma","nicole","helen","samantha","katherine","christine","debra",
+    "rachel","carolyn","janet","catherine","maria","heather","diane",
+    "julie","joyce","victoria","kelly","christina","lauren","joan","evelyn",
+    "judith","megan","cheryl","andrea","hannah","martha","jacqueline",
+    "frances","gloria","teresa","ann","kathryn","sara","janice","alice",
+    "jean","danielle","marilyn","beverly","amber","theresa","doris",
+    "madison","denise","ruby","wanda","bonnie","grace","dawn","brooke",
+    "crystal","taylor","natalie","brianna","sophia","vanessa","hazel",
+    "alexis","tiffany","leah","violet","claire","audrey","diana","abigail",
+    "valerie","vivian","ruth","irene","marie","ana","rosa","florence",
+    "sylvia","lois","vera","carla","connie","gina","lydia","miranda",
+    "priscilla","elaine","charlene","nadine","kayla","holly","tracy",
+    "wendy","cindy","sandy","brandy","melody","destiny","avery","morgan",
+    "quinn","ariana","allison","alicia","alyssa","brittany","courtney",
+    "tara","robyn","giselle","selena","erica","tanya","sherry","jade",
+    "sage","ivy","iris","rose","aurora","luna","stella","eleanor","nora",
+    "chloe","zoe","lily","maya","aria","scarlett","ellie","mia","ella",
+    "eva","addison","layla","penelope","paisley","aaliyah","savannah",
+    "autumn","hailey","leila","naomi","phoebe","tabitha","willow","yolanda",
+    "jasmine","fiona","beatrice","cecilia","claudia","gwen","bella","olivia",
+    "natasha","monique","ebony","latoya","april","june","summer","autumn",
+    "charity","faith","hope","grace","joy","mercy","honor","dawn","iris",
+    "celeste","marina","valentina","gabriela","lucia","ana","isabella",
+    "carmen","elena","sofia","diana","adriana","veronica","monica","rosa",
+    "camille","suzanne","colette","renee","simone","brigitte","genevieve",
+];
+
+/// Common surnames (lowercase). Covers top ~300 US family names.
+const LAST_NAMES: &[&str] = &[
+    "smith","johnson","williams","brown","jones","garcia","miller","davis",
+    "rodriguez","martinez","hernandez","lopez","gonzalez","wilson","anderson",
+    "thomas","taylor","moore","jackson","martin","lee","perez","thompson",
+    "white","harris","sanchez","clark","ramirez","lewis","robinson","walker",
+    "young","allen","king","wright","scott","torres","nguyen","hill","flores",
+    "green","adams","nelson","baker","hall","rivera","campbell","mitchell",
+    "carter","roberts","gomez","phillips","evans","turner","diaz","parker",
+    "cruz","edwards","collins","reyes","stewart","morris","morales","murphy",
+    "cook","rogers","gutierrez","ortiz","morgan","cooper","peterson","bailey",
+    "reed","kelly","howard","ramos","kim","cox","ward","richardson","watson",
+    "brooks","chavez","wood","james","bennett","gray","mendoza","ruiz",
+    "hughes","price","alvarez","castillo","sanders","patel","myers","long",
+    "ross","foster","jimenez","powell","jenkins","perry","russell","sullivan",
+    "bell","coleman","butler","henderson","barnes","gonzales","fisher",
+    "vasquez","simmons","romero","jordan","patterson","alexander","hamilton",
+    "graham","reynolds","griffin","wallace","moreno","west","cole","hayes",
+    "bryant","herrera","gibson","ellis","tran","medina","aguilar","stevens",
+    "murray","ford","castro","marshall","owens","harrison","fernandez",
+    "mcdonald","woods","washington","kennedy","wells","vargas","henry",
+    "chen","freeman","webb","tucker","guzman","burns","crawford","olson",
+    "simpson","porter","hunter","gordon","mendez","silva","shaw","snyder",
+    "mason","dixon","munoz","hunt","hicks","holmes","palmer","wagner",
+    "black","robertson","boyd","rose","stone","salazar","fox","warren",
+    "mills","meyer","rice","schmidt","garza","daniels","ferguson","nichols",
+    "stephens","soto","weaver","ryan","gardner","payne","grant","dunn",
+    "kelley","spencer","hawkins","arnold","pierce","vazquez","hansen",
+    "peters","santos","hart","bradley","knight","elliott","cunningham",
+    "duncan","armstrong","hudson","carroll","lane","riley","andrews",
+    "alvarado","ray","delgado","berry","perkins","hoffman","johnston",
+    "matthews","pena","harvey","burton","chang","cohen","cross","frank",
+    "kaiser","klein","lamb","lowe","lynch","malone","mann","maxwell",
+    "mcbride","mccoy","mckenzie","mckinney","miles","montgomery","moon",
+    "morrison","moss","norris","obrien","oconnor","powers","quinn","ramsey",
+    "reid","rowe","sharp","shields","singleton","sloan","snow","stanley",
+    "stark","underwood","wade","walsh","walton","watts","wyatt","george",
+    "hayes","hudson","strong","terry","cross","obrien","sharp","snow",
+    "barker","bates","bond","booth","butler","carr","day","dean","drake",
+    "dunn","fox","frost","gill","hart","hill","hunt","lamb","lane",
+    "law","love","mann","marsh","nash","page","pope","reed","shaw",
+    "wade","ward","wolf","wood","york","best","bird","black","blake",
+    "bloom","burns","bush","byrd","cash","cole","cook","cook","crain",
+    "crane","crow","daly","dash","dean","dove","duke","dunn","earl",
+    "fern","finn","ford","fort","frey","fry","gale","goss","hale",
+    "hall","holt","horn","hoyt","hyde","jett","kane","kay","kent",
+    "keys","king","kirby","knox","kyle","lake","lara","lark","leal",
+    "lott","love","luna","lyons","mack","wade","vance","vega","vera",
+];
+
+fn first_name_set() -> &'static HashSet<&'static str> {
+    static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    SET.get_or_init(|| FIRST_NAMES.iter().copied().collect())
+}
+
+fn last_name_set() -> &'static HashSet<&'static str> {
+    static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    SET.get_or_init(|| LAST_NAMES.iter().copied().collect())
+}
+
+// ── Name-detection regexes ────────────────────────────────────────────────────
+
+/// Honorific + one-or-more capitalised words.
+/// Capture group 1 = the name portion (title is non-capturing).
+///
+/// IMPORTANT: `(?i:...)` scopes case-insensitivity to the title keyword only.
+/// The name capture group `([A-Z][a-z]+...)` remains case-sensitive so that
+/// `[A-Z]` only matches an uppercase letter and `[a-z]+` only matches
+/// lowercase — preventing "Smith was discharged" from being swallowed whole
+/// by a greedy case-insensitive `[a-z]+`.
+fn title_name_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // Two or more consecutively capitalised ASCII words (e.g. "Alice Johnson")
+    RE.get_or_init(|| {
+        Regex::new(
+            r"\b(?i:mr|mrs|ms|miss|dr|prof|professor|rev|reverend|sir|mx|fr|father)\.?\s+([A-Z][a-z]+(?:[\s\-][A-Z][a-z]+)*)",
+        )
+        .expect("static regex is valid")
+    })
+}
+
+/// Field label (e.g. `name:`, `patient:`) followed by capitalised words.
+/// Capture group 1 = the name portion.
+/// Same scoped-(?i:) approach as `title_name_regex`.
+fn label_name_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"\b(?i:full[\s_]?name|name|first[\s_]?name|last[\s_]?name|surname|username|user|patient|employee|contact|author|physician|nurse|technician|customer|client|owner|manager|director|officer|assignee|reporter|requestor|recipient|provider|sender)\s*:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)",
+        )
+        .expect("static regex is valid")
+    })
+}
+
+/// Attribution verbs ("named X", "called X") followed by capitalised words.
+/// Capture group 1 = the name portion.
+/// A light dictionary check is applied in `detect_names` to suppress
+/// false positives like "called Google Home".
+fn verb_context_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"\b(?i:named|called)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)")
+            .expect("static regex is valid")
+    })
+}
+
+/// Two or more consecutive capitalised words, used for the dictionary strategy.
+fn cap_seq_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b").expect("static regex is valid")
     })
+}
+
+// ── False-positive guard ──────────────────────────────────────────────────────
+
+/// Returns `true` when `word` (still in its original capitalised form) is
+/// unlikely to be a person's surname regardless of what precedes it.
+///
+/// Applied to the *second* word in two-word sequences under the medium-confidence
+/// dictionary path only.  Title and label signals bypass this check entirely.
+fn is_non_person_word(word: &str) -> bool {
+    matches!(
+        word,
+        // Geographic
+        "Street" | "Avenue" | "Road" | "Boulevard" | "Lane" | "Drive"
+        | "Way" | "Court" | "Place" | "Park" | "Square" | "Plaza"
+        | "Circle" | "Heights" | "Hills" | "Valley" | "Lake" | "River"
+        | "Mountain" | "Beach" | "Island" | "Bay" | "Bridge" | "Station"
+        | "Airport" | "Harbor" | "Port" | "Falls" | "Canyon" | "Creek"
+        // Organisation suffixes
+        | "Inc" | "Llc" | "Ltd" | "Corp" | "Co" | "Company" | "Group"
+        | "University" | "College" | "School" | "Institute" | "Academy"
+        | "Hospital" | "Clinic" | "Center" | "Centre" | "Foundation"
+        | "Society" | "Association" | "Bank" | "Fund" | "Partners"
+        | "Services" | "Solutions" | "Technologies" | "Systems"
+        // Directional / common modifiers that open place names
+        | "New" | "Old" | "North" | "South" | "East" | "West"
+        | "Upper" | "Lower" | "Greater" | "Little" | "Grand" | "Big"
+        | "International" | "National" | "American" | "Federal"
+        | "State" | "City" | "County" | "District" | "Central" | "Global"
+        // Calendar months (rarely surnames; "April" / "June" guarded on
+        // the first-name side instead)
+        | "January" | "February" | "March" | "April" | "June"
+        | "July" | "August" | "September" | "October" | "November" | "December"
+        // Weekdays
+        | "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday"
+        | "Saturday" | "Sunday"
+    )
+}
+
+// ── Core name detection ───────────────────────────────────────────────────────
+
+/// Run all three name-detection strategies and return the resulting spans.
+///
+/// `existing` contains spans already claimed by higher-priority detectors
+/// (email, credit card, etc.).  Both `existing` and the spans being built
+/// are checked to prevent overlaps.
+fn detect_names(text: &str, existing: &[PiiSpan]) -> Vec<PiiSpan> {
+    let mut spans: Vec<PiiSpan> = Vec::new();
+    let first_names = first_name_set();
+    let last_names = last_name_set();
+
+    // Inline helper — checks both existing and in-progress spans.
+    // The immutable borrow of `spans` inside `overlaps_existing` ends
+    // before the mutable `spans.push` below (NLL), so this compiles fine.
+    macro_rules! push {
+        ($start:expr, $end:expr, $text:expr) => {{
+            let s = $start;
+            let e = $end;
+            if !overlaps_existing(existing, s, e) && !overlaps_existing(&spans, s, e) {
+                debug!("NER[Name] {:?} {}..{}", $text, s, e);
+                spans.push(PiiSpan {
+                    entity_type: EntityType::Name,
+                    start: s,
+                    end: e,
+                    text: ($text).to_owned(),
+                });
+            }
+        }};
+    }
+
+    // ── Strategy 1: title-triggered ───────────────────────────────────────
+    // "Mr. Smith", "Dr. Alice Johnson", "Prof. Williams"
+    // No dictionary check — the honorific is an unambiguous signal.
+    for cap in title_name_regex().captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            push!(m.start(), m.end(), m.as_str());
+        }
+    }
+
+    // ── Strategy 2a: label-triggered ──────────────────────────────────────
+    // "name: Alice Johnson", "patient: Bob Smith", "employee: Carlos Rivera"
+    for cap in label_name_regex().captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            push!(m.start(), m.end(), m.as_str());
+        }
+    }
+
+    // ── Strategy 2b: verb-context-triggered ───────────────────────────────
+    // "named Alice Johnson", "called Bob Smith"
+    // Light dictionary check: first word must be a known first or last name
+    // to suppress "called Google Home", "named Bluetooth Device", etc.
+    for cap in verb_context_regex().captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            let first_lc = m
+                .as_str()
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
+            if first_names.contains(first_lc.as_str())
+                || last_names.contains(first_lc.as_str())
+            {
+                push!(m.start(), m.end(), m.as_str());
+            }
+        }
+    }
+
+    // ── Strategy 3: dictionary-based (no explicit context) ────────────────
+    // Requires 2+ capitalised words and at least one dictionary match.
+    for m in cap_seq_regex().find_iter(text) {
+        let seq = m.as_str();
+        let words: Vec<&str> = seq.split_whitespace().collect();
+        // words.len() >= 2 is guaranteed by cap_seq_regex
+        let first_lc = words[0].to_lowercase();
+        let last_lc = words[words.len() - 1].to_lowercase();
+
+        let is_name = if first_names.contains(first_lc.as_str())
+            && last_names.contains(last_lc.as_str())
+        {
+            // High confidence: both ends of the sequence are in our dictionaries.
+            true
+        } else if words.len() == 2
+            && first_names.contains(first_lc.as_str())
+            && !is_non_person_word(words[1])
+        {
+            // Medium confidence: first word is a known given name and the
+            // second word is not a known geographic/org/calendar term.
+            true
+        } else if words.len() >= 3 && first_names.contains(first_lc.as_str()) {
+            // Long-sequence confidence: three or more capitalised words
+            // starting with a known given name are almost never non-names.
+            true
+        } else {
+            false
+        };
+
+        if is_name {
+            push!(m.start(), m.end(), seq);
+        }
+    }
+
+    spans
 }
 
 fn jwt_regex() -> &'static Regex {
@@ -329,9 +685,11 @@ impl Ner for RegexNer {
             }
         }
 
-        // Names last — most likely to false-positive inside other token types
+        // Names last — most likely to false-positive inside other token types.
+        // Uses a three-strategy approach: title signals, label/verb signals,
+        // and a curated first/last name dictionary.  See `detect_names`.
         if self.names {
-            push_spans!(name_regex, EntityType::Name);
+            spans.extend(detect_names(text, &spans));
         }
 
         spans.sort_unstable_by_key(|s| s.start);
@@ -698,5 +1056,296 @@ mod tests {
         };
         let spans = ner.find_spans("Alice wrote to a@b.com");
         assert_eq!(spans.len(), 2);
+    }
+
+    // ── Improved name detection tests ─────────────────────────────────────────
+
+    // Strategy 1: title-triggered
+
+    #[test]
+    fn detects_single_surname_after_mr() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("The patient Mr. Smith was discharged");
+        assert!(
+            spans.iter().any(|s| s.entity_type == EntityType::Name && s.text == "Smith"),
+            "single surname after Mr. should be detected"
+        );
+    }
+
+    #[test]
+    fn detects_full_name_after_dr() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Dr. Alice Johnson signed the report");
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.entity_type == EntityType::Name && s.text == "Alice Johnson"),
+            "full name after Dr. should be detected"
+        );
+    }
+
+    #[test]
+    fn detects_name_after_ms() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Please contact Ms. Rodriguez for details");
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.entity_type == EntityType::Name && s.text == "Rodriguez"),
+            "surname after Ms. should be detected"
+        );
+    }
+
+    #[test]
+    fn detects_name_after_prof() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Approved by Prof. David Chen");
+        assert!(
+            spans.iter().any(|s| s.entity_type == EntityType::Name),
+            "name after Prof. should be detected"
+        );
+    }
+
+    // Strategy 2a: label-triggered
+
+    #[test]
+    fn detects_name_from_name_label() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("name: Robert Brown");
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.entity_type == EntityType::Name && s.text == "Robert Brown"),
+            "full name after 'name:' label should be detected"
+        );
+    }
+
+    #[test]
+    fn detects_name_from_patient_label() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("patient: Sarah Connor");
+        assert!(
+            spans.iter().any(|s| s.entity_type == EntityType::Name),
+            "name after 'patient:' label should be detected"
+        );
+    }
+
+    #[test]
+    fn detects_name_from_employee_label() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("employee: Carlos Rivera was onboarded");
+        assert!(
+            spans.iter().any(|s| s.entity_type == EntityType::Name),
+            "name after 'employee:' label should be detected"
+        );
+    }
+
+    #[test]
+    fn detects_name_from_author_label() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("{\"author\": \"Jennifer Martinez\"}");
+        assert!(
+            spans.iter().any(|s| s.entity_type == EntityType::Name),
+            "name after 'author:' label should be detected"
+        );
+    }
+
+    // Strategy 2b: verb-context-triggered
+
+    #[test]
+    fn detects_name_after_named_verb() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("The account was created by a user named Emily Davis");
+        assert!(
+            spans.iter().any(|s| s.entity_type == EntityType::Name),
+            "name after 'named' should be detected"
+        );
+    }
+
+    #[test]
+    fn detects_name_after_called_verb() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("The subscriber called Bob Williams cancelled");
+        assert!(
+            spans.iter().any(|s| s.entity_type == EntityType::Name),
+            "name after 'called' should be detected"
+        );
+    }
+
+    #[test]
+    fn verb_context_does_not_fire_on_unknown_product_name() {
+        // "called" followed by a word not in any name dictionary should not fire.
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("the feature called Zephyr was launched");
+        // "Zephyr" is not in first_names or last_names — should not be detected.
+        assert!(
+            spans.iter().all(|s| s.entity_type != EntityType::Name),
+            "'called Zephyr' should not produce a name span"
+        );
+    }
+
+    // Strategy 3: dictionary-based
+
+    #[test]
+    fn detects_high_confidence_first_plus_last() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Robert Brown approved the change at 09:00");
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.entity_type == EntityType::Name && s.text == "Robert Brown"),
+            "first+last dictionary match should be detected"
+        );
+    }
+
+    #[test]
+    fn detects_medium_confidence_first_name_only() {
+        let ner = RegexNer::default();
+        // "Jessica" is in first_names; "Nguyen" is in last_names — high confidence
+        let spans = ner.find_spans("Jessica Nguyen submitted the ticket");
+        assert!(
+            spans.iter().any(|s| s.entity_type == EntityType::Name),
+            "first+last dictionary match should be detected"
+        );
+    }
+
+    #[test]
+    fn detects_three_part_name() {
+        let ner = RegexNer::default();
+        // "Mary Jo Anderson" — first word in first_names, 3 words total
+        let spans = ner.find_spans("Signed by Mary Jo Anderson");
+        assert!(
+            spans.iter().any(|s| s.entity_type == EntityType::Name),
+            "three-part name should be detected"
+        );
+    }
+
+    // False-positive prevention
+
+    #[test]
+    fn no_false_positive_new_york() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("The server is located in New York");
+        // "New" is not in first_names
+        assert!(
+            spans.iter().all(|s| s.entity_type != EntityType::Name),
+            "'New York' should not be detected as a name"
+        );
+    }
+
+    #[test]
+    fn no_false_positive_general_electric() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("General Electric reported strong earnings");
+        // "General" is not in first_names
+        assert!(
+            spans.iter().all(|s| s.entity_type != EntityType::Name),
+            "'General Electric' should not be detected as a name"
+        );
+    }
+
+    #[test]
+    fn no_false_positive_victoria_park() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Meet at Victoria Park at noon");
+        // "Victoria" IS in first_names but "Park" is in is_non_person_word
+        assert!(
+            spans.iter().all(|s| s.entity_type != EntityType::Name),
+            "'Victoria Park' should not be detected as a name"
+        );
+    }
+
+    #[test]
+    fn no_false_positive_national_bank() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Transferred funds to National Bank");
+        // "National" is not in first_names
+        assert!(
+            spans.iter().all(|s| s.entity_type != EntityType::Name),
+            "'National Bank' should not be detected as a name"
+        );
+    }
+
+    #[test]
+    fn no_false_positive_victoria_station() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Departing from Victoria Station");
+        // "Station" is in is_non_person_word
+        assert!(
+            spans.iter().all(|s| s.entity_type != EntityType::Name),
+            "'Victoria Station' should not be detected as a name"
+        );
+    }
+
+    #[test]
+    fn single_capitalized_word_not_detected_without_context() {
+        let ner = RegexNer::default();
+        // A lone surname with no title or label context — too ambiguous.
+        let spans = ner.find_spans("Smith submitted the report");
+        assert!(
+            spans.iter().all(|s| s.entity_type != EntityType::Name),
+            "single surname without context should not be detected"
+        );
+    }
+
+    // Edge cases
+
+    #[test]
+    fn email_wins_over_name_in_address() {
+        // Names strategy runs after email; overlapping spans are skipped.
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("john.smith@example.com");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].entity_type, EntityType::Email);
+    }
+
+    #[test]
+    fn name_and_email_both_detected_when_separate() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Alice Johnson sent alice@corp.com");
+        assert!(
+            spans.iter().any(|s| s.entity_type == EntityType::Name),
+            "name should be detected separately from email"
+        );
+        assert!(
+            spans.iter().any(|s| s.entity_type == EntityType::Email),
+            "email should also be detected"
+        );
+    }
+
+    #[test]
+    fn names_toggle_disabled_suppresses_all_strategies() {
+        let ner = RegexNer {
+            names: false,
+            ..RegexNer::default()
+        };
+        let text = "Dr. Alice Johnson — name: Robert Brown — named Emily Davis";
+        let spans = ner.find_spans(text);
+        assert!(
+            spans.iter().all(|s| s.entity_type != EntityType::Name),
+            "names toggle=false should suppress all strategies"
+        );
+    }
+
+    #[test]
+    fn title_dot_optional() {
+        // "Mr Smith" (no period) should also fire.
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Mr Smith checked in");
+        assert!(
+            spans.iter().any(|s| s.entity_type == EntityType::Name && s.text == "Smith"),
+            "title without period should still trigger detection"
+        );
+    }
+
+    #[test]
+    fn hyphenated_double_barrel_surname_after_title() {
+        let ner = RegexNer::default();
+        let spans = ner.find_spans("Dr. Mary-Jane Watson");
+        // "Mary-Jane Watson" — title triggers detection regardless of hyphen
+        assert!(
+            spans.iter().any(|s| s.entity_type == EntityType::Name),
+            "hyphenated name after title should be detected"
+        );
     }
 }
