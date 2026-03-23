@@ -27,13 +27,15 @@ and a Python extension module (`pip install airlock`, built with maturin/PyO3).
 |------|------|
 | `src/lib.rs` | Crate root — declares public modules and conditionally compiles the Python extension. |
 | `src/types.rs` | Shared data types: `EntityType`, `PiiSpan`, `SwapRecord`, `LedgerEntry`. |
-| `src/ner.rs` | `Ner` trait + `RegexNer` implementation — detects PII spans in strings using static compiled regexes with priority ordering and post-match validators (Luhn for cards, area-number filter for SSNs). |
-| `src/scrub.rs` | End-to-end pipeline: parallel NER scan (Rayon) → sequential alias assignment (`AliasEngine`) → parallel alias application → compression → ledger write. Also owns `AliasMode`, `ScrubConfig`, `ScrubResult`, and `parse_entries`. |
+| `src/ner.rs` | `Ner` trait + `RegexNer` implementation — detects PII spans using static regexes, curated name dictionaries, and context heuristics (honorifics, field labels, attribution verbs). |
+| `src/scrub.rs` | End-to-end pipeline: parallel NER scan (Rayon) → sequential alias assignment (`AliasEngine`) → parallel alias application → compression → ledger write. Also owns `AliasMode`, `ScrubConfig`, `ScrubResult`, `compute_risk`, and `parse_entries`. |
 | `src/compress.rs` | Token-Tax compression — extracts a union schema from a JSON object slice and rewrites each entry as a positional value row. |
-| `src/ledger.rs` | SQLite Risk Ledger wrapper — auto-creates schema on first open, exposes `record` (INSERT) and `recent` (SELECT … LIMIT n). |
-| `src/config.rs` | `.airlock.toml` loader — `AirlockConfig` with `[scrub]`, `[redact]`, and `[[rules]]` sections; missing file silently returns defaults. |
+| `src/ledger.rs` | SQLite Risk Ledger wrapper — auto-creates schema on first open, exposes `record` (INSERT), `recent` (SELECT … LIMIT n), and `get_by_id`. |
+| `src/config.rs` | `.airlock.toml` loader — `AirlockConfig` with `[scrub]`, `[redact]`, `[server]`, and `[[rules]]` sections; missing file silently returns defaults. |
+| `src/server.rs` | Axum REST API — `POST /redact`, `POST /restore`, `GET /audit`; wired to `airlock serve` CLI subcommand. Shares state via `AppState` (config + db path). |
 | `src/python.rs` | PyO3 bindings (feature-gated) — exposes `airlock.scrub()` and `airlock.compress()` to Python with `ScrubOutput` / `CompressOutput` return types. |
-| `src/main.rs` | CLI entry point — Clap subcommands (`scrub`, `compress`, `ledger`), config loading, NER construction, and terminal report banners. |
+| `src/main.rs` | CLI entry point — Clap subcommands (`scrub`, `compress`, `ledger`, `serve`), config loading, NER construction, and terminal report banners. |
+| `src/bin/airlock_mcp.rs` | MCP server binary (`airlock-mcp`) — stdio transport, two tools: `redact_data` and `audit_log`; calls into `scrub::scrub` and `ledger::Ledger` via `spawn_blocking`. |
 
 ### Scrub pipeline phases (src/scrub.rs)
 
@@ -71,6 +73,7 @@ parse_entries (JSON array | NDJSON)
 | `anyhow` | Ergonomic error propagation with `.context()` chains |
 | `toml` | `.airlock.toml` config parsing |
 | `luhn` | ISO/IEC 7812 Luhn validation for credit card post-filtering |
+| `rmcp` | Official Rust MCP SDK — `#[tool_router]` / `#[tool_handler]` macros + stdio transport for `airlock-mcp`. |
 | `pyo3` (optional) | Python extension module — only compiled with `--features python` |
 
 ### Release profile
@@ -100,31 +103,32 @@ parse_entries (JSON array | NDJSON)
 
 ---
 
-## What We're Building Next
+## Completed Features
 
-### 1. Axum REST API (`src/api/`)
+### Axum REST API (`src/server.rs`)
 
-Expose the scrub and compress pipeline over HTTP so any language stack can use
-Airlock as a sidecar proxy without the CLI or Python SDK.
-
-Planned endpoints:
+Exposes the scrub pipeline over HTTP via `airlock serve`.
 
 | Method | Path | Body | Response |
 |--------|------|------|----------|
-| `POST` | `/scrub` | `{ "records": [...], "salt"?: "...", "db_path"?: "..." }` | `ScrubOutput` JSON |
-| `POST` | `/compress` | `{ "records": [...] }` | `CompressOutput` JSON |
-| `GET`  | `/ledger` | — | recent ledger entries |
-| `GET`  | `/health` | — | `{ "status": "ok", "version": "..." }` |
+| `POST` | `/redact` | `{ "data": [...], "salt"?: "...", "options"?: {...} }` | `RedactResponse` JSON |
+| `POST` | `/restore` | `{ "data": ..., "ledger_id": N }` | ledger entry metadata |
+| `GET`  | `/audit` | `?limit=N` | recent ledger entries |
 
-Dependencies to add: `axum`, `tokio` (full), `tower`, `tower-http`.
-The server will share the same `scrub::scrub` / `compress::compress` core —
-no logic duplication.
+Default address: `127.0.0.1:7777` — configurable via `--host`/`--port` flags
+or `[server]` in `.airlock.toml`.
 
-### 2. MCP Server
+### MCP Server (`src/bin/airlock_mcp.rs`)
 
-Wrap the REST API (or call the library directly) as a
-[Model Context Protocol](https://modelcontextprotocol.io) server so AI agents
-can invoke Airlock as a tool call during inference — redacting PII from context
-windows before they are sent upstream.
+Exposes Airlock as a [Model Context Protocol](https://modelcontextprotocol.io)
+server so Claude Desktop (and any MCP agent) can redact PII in-flight during
+inference — before data reaches the upstream LLM API.
 
-Planned MCP tools: `airlock_scrub`, `airlock_compress`, `airlock_ledger`.
+| Tool | Description |
+|------|-------------|
+| `redact_data` | Full scrub pipeline: NER → alias → compress → ledger |
+| `audit_log` | Query the N most recent audit-ledger entries |
+
+Transport: **stdio** (standard for Claude Desktop).
+Install: `cargo install airlock-rs --bin airlock-mcp`.
+Register in `~/Library/Application Support/Claude/claude_desktop_config.json`.

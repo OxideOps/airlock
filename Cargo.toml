@@ -16,6 +16,10 @@ crate-type = ["cdylib", "rlib"]
 name = "airlock"
 path = "src/main.rs"
 
+[[bin]]
+name = "airlock-mcp"
+path = "src/bin/airlock_mcp.rs"
+
 [features]
 python = ["dep:pyo3", "pyo3/extension-module"]
 
@@ -37,8 +41,9 @@ toml          = "0.8"
 axum          = "0.8"
 tokio         = { version = "1", features = ["full"] }
 tower-http    = { version = "0.6", features = ["trace"] }
+rmcp          = { version = "1", features = ["server", "macros", "transport-io"] }
 pyo3          = { version = "0.22", optional = true }
-luhn = "1.0.1"
+luhn          = "1.0.1"
 
 # ── Release profile ───────────────────────────────────────────────────────────
 [profile.release]

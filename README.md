@@ -238,6 +238,78 @@ The ledger stores counts and statistics only — never the original PII values.
 
 ---
 
+## Claude Desktop (MCP)
+
+Airlock ships an MCP server (`airlock-mcp`) so Claude Desktop can automatically
+redact PII from any data you ask it to process — before a single token reaches
+Anthropic's servers.
+
+### Install the binary
+
+```bash
+cargo install airlock-rs --bin airlock-mcp
+```
+
+Or build from source:
+
+```bash
+cargo build --release --bin airlock-mcp
+# binary is at: ./target/release/airlock-mcp
+```
+
+### Register with Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`
+(create it if it doesn't exist):
+
+```json
+{
+  "mcpServers": {
+    "airlock": {
+      "command": "/Users/YOUR_USERNAME/.cargo/bin/airlock-mcp"
+    }
+  }
+}
+```
+
+Replace the path with the output of `which airlock-mcp` after installation.
+Restart Claude Desktop — you'll see **airlock** appear in the MCP tools panel.
+
+### Available MCP tools
+
+| Tool | What it does |
+|------|-------------|
+| `redact_data` | Scrub a JSON array or NDJSON string; returns compressed, PII-free output + stats |
+| `audit_log` | Return the N most recent audit-ledger entries |
+
+**Example prompt to Claude:**
+
+> "Before you analyze this data, run it through `redact_data` first."
+
+Claude will call the tool, receive the redacted output, and continue the
+conversation using only synthetic aliases — the originals never leave your
+machine.
+
+### MCP tool parameters
+
+**`redact_data`**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `data` | string | required | JSON array or NDJSON to redact |
+| `salt` | string | — | Secret for stable cross-run aliases |
+| `names` / `emails` / `phones` / `ssns` / `credit_cards` / `ip_addresses` / `jwt_tokens` / `aws_keys` / `env_secrets` | bool | `true` | Toggle individual PII types |
+| `db_path` | string | `airlock_ledger.db` | Ledger path; empty string skips the write |
+
+**`audit_log`**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | `20` | Number of entries to return (max 100) |
+| `db_path` | string | `airlock_ledger.db` | Ledger path |
+
+---
+
 ## Installation
 
 ### Python (recommended)
@@ -285,14 +357,17 @@ cargo clippy --all-features -- -D warnings
 
 ```
 src/
-├── lib.rs       — Library entry point; Python module registration
-├── main.rs      — CLI (clap): scrub / compress / ledger commands
-├── types.rs     — EntityType, PiiSpan, SwapRecord, LedgerEntry
-├── ner.rs       — Ner trait + RegexNer (9 built-in patterns + custom rules)
-├── scrub.rs     — Pipeline: NER → alias → redact → compress → ledger
-├── compress.rs  — Token-Tax compression (schema extraction + row compaction)
-├── ledger.rs    — SQLite Risk Ledger (rusqlite, bundled)
-└── config.rs    — .airlock.toml loader
+├── lib.rs             — Library entry point; Python module registration
+├── main.rs            — CLI (clap): scrub / compress / ledger / serve commands
+├── types.rs           — EntityType, PiiSpan, SwapRecord, LedgerEntry
+├── ner.rs             — Ner trait + RegexNer (9 built-in patterns + custom rules)
+├── scrub.rs           — Pipeline: NER → alias → redact → compress → ledger
+├── compress.rs        — Token-Tax compression (schema extraction + row compaction)
+├── ledger.rs          — SQLite Risk Ledger (rusqlite, bundled)
+├── server.rs          — Axum REST API: POST /redact, POST /restore, GET /audit
+├── config.rs          — .airlock.toml loader
+└── bin/
+    └── airlock_mcp.rs — MCP server (stdio): redact_data + audit_log tools
 ```
 
 ### Performance
