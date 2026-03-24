@@ -100,13 +100,13 @@ impl Ledger {
             Ok((
                 row.get::<_, i64>(0)?,
                 LedgerEntry {
-                    timestamp:     row.get(1)?,
-                    source_path:   row.get(2)?,
-                    entry_count:   row.get::<_, i64>(3)? as usize,
-                    pii_count:     row.get::<_, i64>(4)? as usize,
-                    risk_score:    row.get(5)?,
+                    timestamp: row.get(1)?,
+                    source_path: row.get(2)?,
+                    entry_count: row.get::<_, i64>(3)? as usize,
+                    pii_count: row.get::<_, i64>(4)? as usize,
+                    risk_score: row.get(5)?,
                     tokens_before: row.get::<_, i64>(6)? as usize,
-                    tokens_after:  row.get::<_, i64>(7)? as usize,
+                    tokens_after: row.get::<_, i64>(7)? as usize,
                     reduction_pct: row.get(8)?,
                 },
             ))

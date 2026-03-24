@@ -22,11 +22,11 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use rmcp::{
-    ErrorData as McpError, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router,
     transport::stdio,
+    ErrorData as McpError, ServerHandler, ServiceExt,
 };
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
@@ -154,34 +154,42 @@ impl AirlockMcp {
     /// alias assignment → parallel alias substitution → Token-Tax compression
     /// → audit ledger write.  Returns the compressed, redacted output ready
     /// to pass to an LLM, along with statistics about what was found.
-    #[tool(description = "Redact PII (names, emails, phones, SSNs, credit cards, IPs, JWTs, AWS keys, env secrets) from a JSON array or NDJSON string. Returns compressed, redacted JSON that is safe to send to an LLM, along with redaction statistics and an audit ledger entry.")]
+    #[tool(
+        description = "Redact PII (names, emails, phones, SSNs, credit cards, IPs, JWTs, AWS keys, env secrets) from a JSON array or NDJSON string. Returns compressed, redacted JSON that is safe to send to an LLM, along with redaction statistics and an audit ledger entry."
+    )]
     async fn redact_data(
         &self,
         Parameters(input): Parameters<RedactInput>,
     ) -> Result<CallToolResult, McpError> {
         let ner = RegexNer {
-            names:        input.names.unwrap_or(true),
-            emails:       input.emails.unwrap_or(true),
-            phones:       input.phones.unwrap_or(true),
-            ssns:         input.ssns.unwrap_or(true),
+            names: input.names.unwrap_or(true),
+            emails: input.emails.unwrap_or(true),
+            phones: input.phones.unwrap_or(true),
+            ssns: input.ssns.unwrap_or(true),
             credit_cards: input.credit_cards.unwrap_or(true),
             ip_addresses: input.ip_addresses.unwrap_or(true),
-            jwt_tokens:   input.jwt_tokens.unwrap_or(true),
-            aws_keys:     input.aws_keys.unwrap_or(true),
-            env_secrets:  input.env_secrets.unwrap_or(true),
+            jwt_tokens: input.jwt_tokens.unwrap_or(true),
+            aws_keys: input.aws_keys.unwrap_or(true),
+            env_secrets: input.env_secrets.unwrap_or(true),
             custom_rules: vec![],
         };
 
         let alias_mode = match input.salt {
             Some(s) => AliasMode::Seeded { salt: s },
-            None    => AliasMode::Sequential,
+            None => AliasMode::Sequential,
         };
 
         // An empty string means "skip ledger write".
         let db_path = input
             .db_path
             .as_deref()
-            .map(|p| if p.is_empty() { None } else { Some(PathBuf::from(p)) })
+            .map(|p| {
+                if p.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(p))
+                }
+            })
             .unwrap_or_else(|| Some(PathBuf::from("airlock_ledger.db")));
 
         let raw = input.data;
@@ -200,14 +208,14 @@ impl AirlockMcp {
         let risk_score = scrub::compute_risk(result.total_pii, result.compressed.entry_count);
 
         let out = RedactOutput {
-            output:        result.compressed.output,
-            total_pii:     result.total_pii,
+            output: result.compressed.output,
+            total_pii: result.total_pii,
             risk_score,
-            entry_count:   result.compressed.entry_count,
+            entry_count: result.compressed.entry_count,
             tokens_before: result.compressed.tokens_before,
-            tokens_after:  result.compressed.tokens_after,
+            tokens_after: result.compressed.tokens_after,
             reduction_pct: result.compressed.reduction_pct,
-            ledger_id:     result.ledger_id,
+            ledger_id: result.ledger_id,
         };
 
         let json_str = serde_json::to_string_pretty(&out)
@@ -221,33 +229,33 @@ impl AirlockMcp {
     /// Each row records metadata from a past `redact_data` call: timestamp,
     /// entry count, PII count, risk score, and token compression savings.
     /// No original PII values are ever written to the ledger.
-    #[tool(description = "Return recent entries from the Airlock audit ledger — newest first. Each row records metadata about a past redaction run: timestamp, entry count, PII count, risk score, and token savings. No original PII values are ever stored.")]
+    #[tool(
+        description = "Return recent entries from the Airlock audit ledger — newest first. Each row records metadata about a past redaction run: timestamp, entry count, PII count, risk score, and token savings. No original PII values are ever stored."
+    )]
     async fn audit_log(
         &self,
         Parameters(input): Parameters<AuditInput>,
     ) -> Result<CallToolResult, McpError> {
-        let limit   = input.limit.unwrap_or(20).min(100);
-        let db_path = PathBuf::from(
-            input.db_path.as_deref().unwrap_or("airlock_ledger.db"),
-        );
+        let limit = input.limit.unwrap_or(20).min(100);
+        let db_path = PathBuf::from(input.db_path.as_deref().unwrap_or("airlock_ledger.db"));
 
         let rows = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<AuditRow>> {
             if !db_path.exists() {
                 return Ok(vec![]);
             }
-            let ledger  = Ledger::open(&db_path)?;
+            let ledger = Ledger::open(&db_path)?;
             let entries = ledger.recent(limit)?;
             Ok(entries
                 .into_iter()
                 .map(|(id, e)| AuditRow {
                     id,
-                    timestamp:     e.timestamp,
-                    source:        e.source_path,
-                    entry_count:   e.entry_count,
-                    pii_count:     e.pii_count,
-                    risk_score:    e.risk_score,
+                    timestamp: e.timestamp,
+                    source: e.source_path,
+                    entry_count: e.entry_count,
+                    pii_count: e.pii_count,
+                    risk_score: e.risk_score,
                     tokens_before: e.tokens_before,
-                    tokens_after:  e.tokens_after,
+                    tokens_after: e.tokens_after,
                     reduction_pct: e.reduction_pct,
                 })
                 .collect())
@@ -266,12 +274,7 @@ impl AirlockMcp {
 #[tool_handler]
 impl ServerHandler for AirlockMcp {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
-            ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
-        )
-        .with_instructions(
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "Airlock is a local-first PII security gateway. \
              Use `redact_data` to strip sensitive information (names, emails, \
              phones, SSNs, credit cards, IPs, JWTs, AWS keys) from JSON data \
@@ -289,10 +292,7 @@ impl ServerHandler for AirlockMcp {
 async fn main() -> Result<()> {
     // Tracing must write to stderr — stdout is the MCP message channel.
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::from_default_env()
-                .add_directive(tracing::Level::WARN.into()),
-        )
+        .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::WARN.into()))
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .init();

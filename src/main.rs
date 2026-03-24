@@ -371,7 +371,11 @@ fn cmd_ledger(db: Option<PathBuf>, last: usize, cfg: &AirlockConfig) -> Result<(
     Ok(())
 }
 
-fn cmd_serve(host: Option<String>, port: Option<u16>, cfg: airlock::config::AirlockConfig) -> Result<()> {
+fn cmd_serve(
+    host: Option<String>,
+    port: Option<u16>,
+    cfg: airlock::config::AirlockConfig,
+) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(airlock::server::serve(cfg, host, port))
 }
