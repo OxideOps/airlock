@@ -140,6 +140,12 @@ pub struct AirlockMcp {
     tool_router: ToolRouter<Self>,
 }
 
+impl Default for AirlockMcp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[tool_router]
 impl AirlockMcp {
     pub fn new() -> Self {
